@@ -11,6 +11,8 @@
 #include <optional>
 #include <string>
 
+#include "common/scope_exit.h"
+#include "common/settings.h"
 #include "core/core.h"
 #include "core/core_timing.h"
 
@@ -79,6 +81,31 @@ TEST_CASE("CoreTiming discards expired event types before dispatching live event
 
     CHECK_FALSE(timing.Advance().has_value());
     CHECK(calls == 1);
+}
+
+TEST_CASE("CoreTiming::GetClockTicks handles zero speed limit with sync_core_speed",
+          "[core][core_timing]") {
+    const auto prev_sync = Settings::values.sync_core_speed.GetValue();
+    const auto prev_mode = Settings::values.current_speed_mode.GetValue();
+    const auto prev_limit = Settings::values.speed_limit.GetValue();
+    SCOPE_EXIT {
+        Settings::values.sync_core_speed.SetValue(prev_sync);
+        Settings::values.current_speed_mode.SetValue(prev_mode);
+        Settings::values.speed_limit.SetValue(prev_limit);
+    };
+
+    Core::Timing::CoreTiming timing;
+    timing.SetMulticore(false);
+    timing.AddTicks(1'000'000U);
+
+    Settings::values.current_speed_mode.SetValue(Settings::SpeedMode::Standard);
+    Settings::values.sync_core_speed.SetValue(false);
+    const u64 unscaled = timing.GetClockTicks();
+    REQUIRE(unscaled > 0);
+
+    Settings::values.speed_limit.SetValue(0);
+    Settings::values.sync_core_speed.SetValue(true);
+    CHECK(timing.GetClockTicks() == unscaled);
 }
 
 TEST_CASE("CoreTiming[BasicOrder]", "[core]") {

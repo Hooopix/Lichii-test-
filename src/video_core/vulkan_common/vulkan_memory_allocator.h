@@ -83,7 +83,8 @@ namespace Vulkan {
         VkDeviceMemory memory{};      ///< Underlying VkDeviceMemory chosen by VMA
         VkDeviceSize offset{};      ///< Offset of this allocation inside VkDeviceMemory
         VkDeviceSize size{};        ///< Size of the allocation
-        void *mapped_ptr{};  ///< Optional persistent mapped pointer
+        void *mapped_ptr{};  ///< Optional persistent or explicit mapped pointer
+        bool owns_mapping{}; ///< True only when vmaMapMemory was called explicitly
     };
 
 /// Memory allocator container.
@@ -203,6 +204,9 @@ namespace Vulkan {
         u32 valid_memory_types{~0u};
         mutable std::atomic<u32> pressure_events{0};
         mutable std::atomic<u32> failed_images{0};
+        mutable std::atomic<u32> image_budget_logged{0};
+        mutable std::atomic<u32> image_failed_logged{0};
+        mutable std::atomic<u32> buffer_budget_logged{0};
         /// steady_clock time (ns) of the last host placement logged after the first ones.
         mutable std::atomic<s64> last_spill_log{0};
         mutable std::atomic<u64> spilled_bytes{0};   ///< Since the start of the session

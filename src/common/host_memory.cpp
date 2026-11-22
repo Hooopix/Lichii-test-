@@ -712,14 +712,10 @@ public:
             unlink(template_path);
         }
 #else
-        fd = memfd_create("HostMemory", 0);
+        fd = memfd_create("HostMemory", MFD_CLOEXEC);
 #endif
         bool use_anon = false;
-#ifdef HAS_NCE
         if (fd < 0) {
-#else
-        if (fd <= 0) {
-#endif
             LOG_WARNING(Common_Memory, "memfd_create: {}", strerror(errno));
             use_anon = true;
         }
@@ -727,20 +723,20 @@ public:
             // Defined to extend the file with zeros
             int ret = ftruncate(fd, backing_size);
             if (ret != 0) {
-                LOG_WARNING(Common_Memory, "ftruncate: {} (likely out-of-emory)", strerror(errno));
+                LOG_WARNING(Common_Memory, "ftruncate: {} (likely out-of-memory)", strerror(errno));
                 use_anon = true;
             }
         }
         if (use_anon) {
+            if (fd >= 0) {
+                close(fd);
+                fd = -1;
+            }
 #ifdef HAS_NCE
             return false;
 #else
             LOG_WARNING(Common_Memory, "Using private mappings instead of shared ones");
             backing_base = static_cast<u8*>(mmap(nullptr, backing_size, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE | MAP_NOCORE, -1, 0));
-            if (fd > 0) {
-                fd = -1;
-                close(fd);
-            }
 #endif
         } else {
             backing_base = static_cast<u8*>(mmap(nullptr, backing_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_NOCORE, fd, 0));

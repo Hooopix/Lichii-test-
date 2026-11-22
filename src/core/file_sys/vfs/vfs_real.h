@@ -78,6 +78,7 @@ private:
 private:
     VirtualFile OpenFileLocked(const std::string& path, std::optional<u64> size, OpenMode perms);
     bool RenameFileLocked(const std::string& old_path, const std::string& new_path);
+    bool RenameDirectoryLocked(const std::string& old_path, const std::string& new_path);
     Result DeleteFileWithResult(std::string_view path);
     void DetachReferenceLocked(FileCache::iterator entry);
     void CloseReferenceLocked(FileReference& reference);
