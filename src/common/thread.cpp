@@ -965,12 +965,18 @@ bool Event::WaitFor(const std::chrono::nanoseconds time) {
 #else
 bool Event::WaitFor(const std::chrono::nanoseconds time) {
 #ifdef _WIN32
-    auto const end = Common::g_wall_clock.GetTimeNS() + time;
-    while (!is_set.load() && end > Common::g_wall_clock.GetTimeNS())
+    const auto deadline = EventWaitDeadline(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()),
+        time);
+    const auto remaining = [deadline] {
+        return deadline - std::chrono::duration_cast<std::chrono::nanoseconds>(
+                              std::chrono::steady_clock::now().time_since_epoch());
+    };
+    while (!is_set.load() && remaining() > std::chrono::nanoseconds::zero())
         Common::Windows::SleepForOneTick();
-    if (is_set.load())
-        Reset();
-    return true;
+    bool expected = true;
+    return is_set.compare_exchange_strong(expected, false, std::memory_order_release);
 #else
     std::unique_lock lk{mutex};
     const auto now = std::chrono::steady_clock::now();

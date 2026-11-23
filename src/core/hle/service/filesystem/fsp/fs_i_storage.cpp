@@ -37,7 +37,8 @@ Result IStorage::Read(
     s64 offset, s64 length) {
     LOG_DEBUG(Service_FS, "called, offset={:#x}, length={}", offset, length);
 
-    R_UNLESS(length >= 0, FileSys::ResultInvalidSize);
+    R_UNLESS(length >= 0 && static_cast<u64>(length) <= out_bytes.size(),
+             FileSys::ResultInvalidSize);
     R_UNLESS(offset >= 0, FileSys::ResultInvalidOffset);
 
     if (throttle.bytes_per_second > 0) {

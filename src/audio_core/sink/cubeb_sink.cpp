@@ -335,18 +335,17 @@ std::vector<std::string> ListCubebSinkDevices(bool capture) {
 
 #ifdef _WIN32
     auto com_init_result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    SCOPE_EXIT {
+        if (SUCCEEDED(com_init_result)) {
+            CoUninitialize();
+        }
+    };
 #endif
 
     if (cubeb_init(&ctx, "Eden Device Enumerator", nullptr) != CUBEB_OK) {
         LOG_CRITICAL(Audio_Sink, "cubeb_init failed");
         return {};
     }
-
-#ifdef _WIN32
-    if (SUCCEEDED(com_init_result)) {
-        CoUninitialize();
-    }
-#endif
 
     auto type{capture ? CUBEB_DEVICE_TYPE_INPUT : CUBEB_DEVICE_TYPE_OUTPUT};
     cubeb_device_collection collection;
@@ -373,6 +372,11 @@ u32 GetCubebLatency() {
 
 #ifdef _WIN32
     auto com_init_result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    SCOPE_EXIT {
+        if (SUCCEEDED(com_init_result)) {
+            CoUninitialize();
+        }
+    };
 #endif
 
     // Init cubeb
@@ -381,12 +385,6 @@ u32 GetCubebLatency() {
         // Return a large latency so we choose SDL instead.
         return 10000u;
     }
-
-#ifdef _WIN32
-    if (SUCCEEDED(com_init_result)) {
-        CoUninitialize();
-    }
-#endif
 
     // Get min latency
     cubeb_stream_params params{};

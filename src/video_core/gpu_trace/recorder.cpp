@@ -65,6 +65,7 @@ struct Recorder {
     Clock::time_point last_file_check;
 
     std::mutex dirty_mutex;
+    Core::System* dirty_system = nullptr;
     const u8* backing = nullptr;
     size_t backing_size = 0;
     /// Physical pages in the trace: only their CPU writes are recorded.
@@ -263,6 +264,7 @@ void Release(Recorder& r) {
         r.tracked = {};
         r.dirty = {};
         r.dirty_pages = {};
+        r.dirty_system = nullptr;
         r.backing = nullptr;
         r.backing_size = 0;
     }
@@ -359,6 +361,7 @@ bool Snapshot(Recorder& r, Core::System& system) {
     {
         std::scoped_lock lock{r.dirty_mutex};
         auto& memory = system.DeviceMemory().buffer;
+        r.dirty_system = &system;
         r.backing = memory.BackingBasePointer();
         r.backing_size = memory.BackingSize();
         r.tracked.assign(r.backing_size >> PageBits, 0);
@@ -455,16 +458,11 @@ RecorderStatus GetRecorderStatus() {
     };
 }
 
-void NoteCpuWrite(const u8* pointer, size_t size) {
-    if (!g_recording.load(std::memory_order_relaxed) || size == 0) {
+namespace {
+void NotePhysicalWriteLocked(Recorder& r, u64 begin, u64 size) {
+    if (size == 0 || begin >= r.backing_size) {
         return;
     }
-    auto& r = Get();
-    std::scoped_lock lock{r.dirty_mutex};
-    if (pointer < r.backing || pointer >= r.backing + r.backing_size) {
-        return;
-    }
-    const u64 begin = static_cast<u64>(pointer - r.backing);
     const u64 end = std::min<u64>(begin + size, r.backing_size);
     for (u64 page = begin >> PageBits; (page << PageBits) < end; ++page) {
         if (r.tracked[page] == 0) {
@@ -478,17 +476,30 @@ void NoteCpuWrite(const u8* pointer, size_t size) {
         r.dirty[page] = MergeExtent(r.dirty[page], low, high);
     }
 }
+} // Anonymous namespace
+
+void NoteCpuWrite(const u8* pointer, size_t size) {
+    if (!g_recording.load(std::memory_order_relaxed) || size == 0) {
+        return;
+    }
+    auto& r = Get();
+    std::scoped_lock lock{r.dirty_mutex};
+    if (r.backing == nullptr || pointer < r.backing || pointer >= r.backing + r.backing_size) {
+        return;
+    }
+    NotePhysicalWriteLocked(r, static_cast<u64>(pointer - r.backing), size);
+}
 
 void NoteDeviceWrite(DAddr address, u64 size) {
     if (!g_recording.load(std::memory_order_relaxed) || size == 0) {
         return;
     }
     auto& r = Get();
-    Core::System* const system = r.system;
-    if (system == nullptr) {
+    std::scoped_lock lock{r.dirty_mutex};
+    if (r.dirty_system == nullptr || r.backing == nullptr) {
         return;
     }
-    auto& smmu = system->Host1x().MemoryManager();
+    auto& smmu = r.dirty_system->Host1x().MemoryManager();
     const u64 end = address + size;
     for (u64 page = address & ~(PageSize - 1); page < end; page += PageSize) {
         const u64 physical = smmu.GetPhysicalRawAddressFromDAddr(page);
@@ -497,7 +508,7 @@ void NoteDeviceWrite(DAddr address, u64 size) {
         }
         const u64 begin = std::max<u64>(address, page);
         const u64 stop = std::min(end, page + PageSize);
-        NoteCpuWrite(r.backing + physical + (begin - page), stop - begin);
+        NotePhysicalWriteLocked(r, physical + (begin - page), stop - begin);
     }
 }
 

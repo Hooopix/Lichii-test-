@@ -279,13 +279,57 @@ VirtualDir RealVfsFilesystem::CopyDirectory(std::string_view old_path_,
 
 VirtualDir RealVfsFilesystem::MoveDirectory(std::string_view old_path_,
                                             std::string_view new_path_) {
-    const auto old_path = FS::SanitizePath(old_path_, FS::DirectorySeparator::PlatformDefault);
-    const auto new_path = FS::SanitizePath(new_path_, FS::DirectorySeparator::PlatformDefault);
-
-    if (!FS::RenameDir(old_path, new_path)) {
+    const auto old_sanitized = FS::SanitizePath(old_path_, FS::DirectorySeparator::PlatformDefault);
+    const auto new_sanitized = FS::SanitizePath(new_path_, FS::DirectorySeparator::PlatformDefault);
+    const std::string old_path{FS::RemoveTrailingSlash(old_sanitized)};
+    const std::string new_path{FS::RemoveTrailingSlash(new_sanitized)};
+    std::scoped_lock lk{list_lock};
+    if (!RenameDirectoryLocked(old_path, new_path)) {
         return nullptr;
     }
     return OpenDirectory(new_path, OpenMode::ReadWrite);
+}
+
+bool RealVfsFilesystem::RenameDirectoryLocked(const std::string& old_path,
+                                              const std::string& new_path) {
+    if (old_path.empty() || new_path.empty() || old_path == new_path) {
+        return false;
+    }
+    std::vector<FileCache::iterator> affected;
+    for (auto it = cache.begin(); it != cache.end(); ++it) {
+        if (IsWithinRoot(old_path, it->first)) {
+            affected.push_back(it);
+        }
+    }
+#ifdef _WIN32
+    for (const auto it : affected) {
+        CloseReferenceLocked(*it->second.reference);
+    }
+#endif
+    if (!FS::RenameDir(old_path, new_path)) {
+        return false;
+    }
+
+    for (auto it = cache.begin(); it != cache.end();) {
+        if (IsWithinRoot(new_path, it->first) && !IsWithinRoot(old_path, it->first)) {
+            const auto next = std::next(it);
+            DetachReferenceLocked(it);
+            it = next;
+        } else {
+            ++it;
+        }
+    }
+    for (const auto it : affected) {
+#ifndef _WIN32
+        CloseReferenceLocked(*it->second.reference);
+#endif
+        const std::string updated_path = new_path + it->first.substr(old_path.size());
+        auto entry = cache.extract(it);
+        entry.key() = updated_path;
+        entry.mapped().reference->path = updated_path;
+        cache.insert(std::move(entry));
+    }
+    return true;
 }
 
 bool RealVfsFilesystem::DeleteDirectory(std::string_view path_) {
@@ -638,8 +682,23 @@ Result RealVfsDirectory::DeleteFileWithResult(std::string_view name) {
 }
 
 bool RealVfsDirectory::Rename(std::string_view name) {
-    const std::string new_name = (parent_path + '/').append(name);
-    return base.MoveFile(path, new_name) != nullptr;
+    if (name.empty() || name.find('/') != std::string_view::npos ||
+        name.find('\\') != std::string_view::npos) {
+        return false;
+    }
+    const auto sanitized =
+        FS::SanitizePath((parent_path + '/').append(name), FS::DirectorySeparator::PlatformDefault);
+    const std::string new_path{FS::RemoveTrailingSlash(sanitized)};
+    {
+        std::scoped_lock lk{base.list_lock};
+        if (!base.RenameDirectoryLocked(path, new_path)) {
+            return false;
+        }
+    }
+    path = new_path;
+    parent_path = FS::GetParentPath(path);
+    path_components = FS::SplitPathComponentsCopy(path);
+    return true;
 }
 
 std::string RealVfsDirectory::GetFullPath() const {

@@ -103,7 +103,8 @@ namespace {
 MemoryCommit::MemoryCommit(VmaAllocator alloc, VmaAllocation a,
                             const VmaAllocationInfo &info) noexcept
         : allocator{alloc}, allocation{a}, memory{info.deviceMemory},
-            offset{info.offset}, size{info.size}, mapped_ptr{info.pMappedData} {
+            offset{info.offset}, size{info.size}, mapped_ptr{info.pMappedData},
+            owns_mapping{false} {
     // Log GPU memory allocation
     if (GPU::Logging::IsActive() &&
         Settings::values.gpu_log_memory_tracking.GetValue()) {
@@ -123,7 +124,8 @@ MemoryCommit::MemoryCommit(MemoryCommit &&rhs) noexcept
             memory{std::exchange(rhs.memory, VK_NULL_HANDLE)},
             offset{std::exchange(rhs.offset, 0)},
             size{std::exchange(rhs.size, 0)},
-            mapped_ptr{std::exchange(rhs.mapped_ptr, nullptr)} {}
+            mapped_ptr{std::exchange(rhs.mapped_ptr, nullptr)},
+            owns_mapping{std::exchange(rhs.owns_mapping, false)} {}
 
 MemoryCommit &MemoryCommit::operator=(MemoryCommit &&rhs) noexcept {
     if (this != &rhs) {
@@ -134,6 +136,7 @@ MemoryCommit &MemoryCommit::operator=(MemoryCommit &&rhs) noexcept {
         offset = std::exchange(rhs.offset, 0);
         size = std::exchange(rhs.size, 0);
         mapped_ptr = std::exchange(rhs.mapped_ptr, nullptr);
+        owns_mapping = std::exchange(rhs.owns_mapping, false);
     }
     return *this;
 }
@@ -143,6 +146,7 @@ std::span<u8> MemoryCommit::Map()
     if (!allocation) return {};
     if (!mapped_ptr) {
         if (vmaMapMemory(allocator, allocation, &mapped_ptr) != VK_SUCCESS) return {};
+        owns_mapping = true;
     }
     const size_t n = static_cast<size_t>(std::min<VkDeviceSize>(size,
                                                                 (std::numeric_limits<size_t>::max)()));
@@ -155,7 +159,9 @@ std::span<const u8> MemoryCommit::Map() const
     if (!mapped_ptr) {
         void *p = nullptr;
         if (vmaMapMemory(allocator, allocation, &p) != VK_SUCCESS) return {};
-        const_cast<MemoryCommit *>(this)->mapped_ptr = p;
+        auto *self = const_cast<MemoryCommit *>(this);
+        self->mapped_ptr = p;
+        self->owns_mapping = true;
     }
     const size_t n = static_cast<size_t>(std::min<VkDeviceSize>(size,
                                                                 (std::numeric_limits<size_t>::max)()));
@@ -164,9 +170,10 @@ std::span<const u8> MemoryCommit::Map() const
 
 void MemoryCommit::Unmap()
 {
-    if (allocation && mapped_ptr) {
+    if (allocation && owns_mapping) {
         vmaUnmapMemory(allocator, allocation);
         mapped_ptr = nullptr;
+        owns_mapping = false;
     }
 }
 
@@ -181,10 +188,11 @@ void MemoryCommit::Release() {
             );
         }
 
-        if (mapped_ptr) {
+        if (owns_mapping) {
             vmaUnmapMemory(allocator, allocation);
-            mapped_ptr = nullptr;
+            owns_mapping = false;
         }
+        mapped_ptr = nullptr;
         vmaFreeMemory(allocator, allocation);
     }
     allocation = nullptr;
@@ -192,6 +200,8 @@ void MemoryCommit::Release() {
     memory = VK_NULL_HANDLE;
     offset = 0;
     size = 0;
+    mapped_ptr = nullptr;
+    owns_mapping = false;
 }
 
 MemoryAllocator::MemoryAllocator(const Device &device_)
@@ -273,8 +283,7 @@ VkResult MemoryAllocator::AllocateImage(const VkImageCreateInfo &ci, bool dedica
     if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY && !huge) {
         // Over the device memory budget (Switch 2 titles fill 8 GB cards): let the driver page
         // it out rather than failing the draw and aborting.
-        static u32 logged{};
-        if (logged++ < 32) {
+        if (image_budget_logged.fetch_add(1, std::memory_order_relaxed) < 32) {
             LOG_WARNING(Render_Vulkan,
                         "Image {}x{}x{} ({} levels, {} layers, format {}) is over the memory "
                         "budget; allocating it anyway",
@@ -307,13 +316,13 @@ VkResult MemoryAllocator::AllocateImage(const VkImageCreateInfo &ci, bool dedica
     }
     if (result != VK_SUCCESS) {
         failed_images.fetch_add(1, std::memory_order_relaxed);
-        static u32 failed_logged{};
-        if (failed_logged == 0) {
+        const u32 failed_count = image_failed_logged.fetch_add(1, std::memory_order_relaxed);
+        if (failed_count == 0) {
             // What ran out: the device's heaps or the host's commit. Before the error line,
             // which is the one that reaches the log file when the session ends here.
             LogMemoryTrace(device);
         }
-        if (failed_logged++ < 32) {
+        if (failed_count < 32) {
             LOG_ERROR(Render_Vulkan, "Image {}x{}x{} ({} levels, {} layers, format {}) failed: {}",
                       ci.extent.width, ci.extent.height, ci.extent.depth, ci.mipLevels,
                       ci.arrayLayers, static_cast<u32>(ci.format), static_cast<int>(result));
@@ -536,8 +545,7 @@ VkResult MemoryAllocator::AllocateBuffer(const VkBufferCreateInfo &ci, MemoryUsa
             // unbacked fallback, and the vk::Exception a failed staging or buffer cache
             // allocation throws from the GPU thread aborts the process. Phones share RAM with
             // the GPU, so the budget is often lower than the memory that is really free.
-            static u32 logged{};
-            if (logged++ < 32) {
+            if (buffer_budget_logged.fetch_add(1, std::memory_order_relaxed) < 32) {
                 LOG_WARNING(Render_Vulkan,
                             "Buffer of {} bytes (usage {}) is over the memory budget; "
                             "allocating it anyway",
@@ -610,17 +618,10 @@ MemoryCommit MemoryAllocator::Commit(const VkMemoryRequirements &reqs, MemoryUsa
     VkResult res = vmaAllocateMemory(allocator, &reqs, &ci, &a, &info);
 
     if (res != VK_SUCCESS) {
-        // Relax 1: drop budget constraint
+        // Relax: drop budget constraint
         auto ci2 = ci;
         ci2.flags &= ~VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT;
         res = vmaAllocateMemory(allocator, &reqs, &ci2, &a, &info);
-
-        // Relax 2: if we preferred DEVICE_LOCAL, drop that preference
-        if (res != VK_SUCCESS && (ci.preferredFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) {
-            auto ci3 = ci2;
-            ci3.preferredFlags &= ~VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
-            res = vmaAllocateMemory(allocator, &reqs, &ci3, &a, &info);
-        }
     }
 
     vk::Check(res);
@@ -652,12 +653,6 @@ MemoryCommit MemoryAllocator::Commit(const vk::Buffer &buffer, MemoryUsage usage
         auto ci2 = ci;
         ci2.flags &= ~VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT;
         res = vmaAllocateMemoryForBuffer(allocator, raw, &ci2, &a, &info);
-
-        if (res != VK_SUCCESS && (ci.preferredFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) {
-            auto ci3 = ci2;
-            ci3.preferredFlags &= ~VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
-            res = vmaAllocateMemoryForBuffer(allocator, raw, &ci3, &a, &info);
-        }
     }
 
     vk::Check(res);
@@ -681,6 +676,8 @@ IDXGIAdapter3* FindDxgiAdapter(const Device& device) {
     }
     LUID luid{};
     std::memcpy(&luid, id.deviceLUID, sizeof(luid));
+    static std::mutex cache_mutex;
+    std::scoped_lock lock{cache_mutex};
     static LUID cached_luid{};
     static IDXGIAdapter3* cached{};
     if (cached != nullptr && cached_luid.LowPart == luid.LowPart &&
@@ -692,7 +689,7 @@ IDXGIAdapter3* FindDxgiAdapter(const Device& device) {
         cached = nullptr;
     }
     cached_luid = luid;
-    const HMODULE dxgi = LoadLibraryW(L"dxgi.dll");
+    static const HMODULE dxgi = LoadLibraryW(L"dxgi.dll");
     if (dxgi == nullptr) {
         return nullptr;
     }

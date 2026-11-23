@@ -65,6 +65,42 @@ TEST_CASE("Real VFS can rename a file while its reference is live", "[core][vfs]
     CHECK(renamed->ReadByte(0) == 0x42);
 }
 
+TEST_CASE("Real VFS can rename a directory", "[core][vfs]") {
+    const Tests::TempDir temp{"lichii-vfs"};
+    const auto old_dir_path = Common::FS::PathToUTF8String(temp / "old_dir");
+    const auto new_dir_path = Common::FS::PathToUTF8String(temp / "new_dir");
+    const auto sibling_path = Common::FS::PathToUTF8String(temp / "existing_dir");
+    FileSys::RealVfsFilesystem fs;
+
+    const auto dir = fs.CreateDirectory(old_dir_path);
+    REQUIRE(dir);
+    const auto child = dir->CreateFile("inside.bin");
+    REQUIRE(child);
+    REQUIRE(child->WriteByte(0x7A));
+    REQUIRE(child->ReadByte(0) == 0x7A);
+
+    const auto existing = fs.CreateDirectory(sibling_path);
+    REQUIRE(existing);
+    CHECK_FALSE(dir->Rename("existing_dir"));
+    CHECK_FALSE(dir->Rename(""));
+    CHECK_FALSE(dir->Rename("bad/name"));
+    CHECK(dir->GetName() == "old_dir");
+
+    REQUIRE(dir->Rename("new_dir"));
+    CHECK(dir->GetName() == "new_dir");
+    CHECK_FALSE(std::filesystem::exists(temp / "old_dir"));
+    CHECK(std::filesystem::is_directory(temp / "new_dir"));
+    CHECK(child->ReadByte(0) == 0x7A);
+
+    const auto reopened = fs.OpenFile(Common::FS::PathToUTF8String(temp / "new_dir" / "inside.bin"));
+    REQUIRE(reopened);
+    CHECK(reopened == child);
+    CHECK(reopened->ReadByte(0) == 0x7A);
+    const auto via_dir = dir->GetFile("inside.bin");
+    REQUIRE(via_dir);
+    CHECK(via_dir->ReadByte(0) == 0x7A);
+}
+
 #ifdef _WIN32
 TEST_CASE("Real VFS reports a genuinely locked delete", "[core][vfs]") {
     const Tests::TempDir temp{"lichii-vfs"};
