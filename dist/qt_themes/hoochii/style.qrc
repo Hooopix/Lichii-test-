@@ -1,0 +1,67 @@
+<!--
+SPDX-FileCopyrightText: Copyright 2026 Hoochii Project
+SPDX-License-Identifier: GPL-3.0-or-later
+-->
+
+<RCC>
+    <qresource prefix="icons/hoochii">
+        <file alias="index.theme">index.theme</file>
+    </qresource>
+    <qresource prefix="hoochii">
+        <file>style.qss</file>
+        <file>icons/apps_active.png</file>
+        <file>icons/apps_active@2x.png</file>
+        <file>icons/audio_active.png</file>
+        <file>icons/audio_active@2x.png</file>
+        <file>icons/bug_active.png</file>
+        <file>icons/bug_active@2x.png</file>
+        <file>icons/check_mixed.png</file>
+        <file>icons/check_mixed@2x.png</file>
+        <file>icons/check_on.png</file>
+        <file>icons/check_on@2x.png</file>
+        <file>icons/cloud_active.png</file>
+        <file>icons/cloud_active@2x.png</file>
+        <file>icons/cpu_active.png</file>
+        <file>icons/cpu_active@2x.png</file>
+        <file>icons/drive_active.png</file>
+        <file>icons/drive_active@2x.png</file>
+        <file>icons/gamepad_active.png</file>
+        <file>icons/gamepad_active@2x.png</file>
+        <file>icons/globe_active.png</file>
+        <file>icons/globe_active@2x.png</file>
+        <file>icons/keyboard_active.png</file>
+        <file>icons/keyboard_active@2x.png</file>
+        <file>icons/layers_active.png</file>
+        <file>icons/layers_active@2x.png</file>
+        <file>icons/list_active.png</file>
+        <file>icons/list_active@2x.png</file>
+        <file>icons/monitor_active.png</file>
+        <file>icons/monitor_active@2x.png</file>
+        <file>icons/puzzle_active.png</file>
+        <file>icons/puzzle_active@2x.png</file>
+        <file>icons/radio_on.png</file>
+        <file>icons/radio_on@2x.png</file>
+        <file>icons/reset.png</file>
+        <file>icons/reset@2x.png</file>
+        <file>icons/sliders_active.png</file>
+        <file>icons/sliders_active@2x.png</file>
+        <file>icons/star_accent.png</file>
+        <file>icons/star_accent@2x.png</file>
+        <file>icons/system_active.png</file>
+        <file>icons/system_active@2x.png</file>
+        <file>icons/toggle_on.png</file>
+        <file>icons/toggle_on@2x.png</file>
+        <file>icons/user_active.png</file>
+        <file>icons/user_active@2x.png</file>
+        <file>icons/wand_active.png</file>
+        <file>icons/wand_active@2x.png</file>
+        <file>icons/whatsnew_gamepad.png</file>
+        <file>icons/whatsnew_gamepad@2x.png</file>
+        <file>icons/whatsnew_reset.png</file>
+        <file>icons/whatsnew_reset@2x.png</file>
+        <file>icons/whatsnew_sliders.png</file>
+        <file>icons/whatsnew_sliders@2x.png</file>
+        <file>icons/whatsnew_wand.png</file>
+        <file>icons/whatsnew_wand@2x.png</file>
+    </qresource>
+</RCC>

@@ -139,7 +139,7 @@ jobs:
       - name: Replay GPU traces on lavapipe
         run: |
           python3 tools/nx2/test_trace_replay.py
-          python3 -I tools/nx2/trace_replay.py check --cli build/bin/eden-cli \
+          python3 -I tools/nx2/trace_replay.py check --cli build/bin/hoochii-cli \
             --corpus tests/gpu_traces/corpus.json
 
       - name: Test cache metrics and bench
@@ -292,7 +292,7 @@ jobs:
       - name: Build and verify both executable signatures
         run: |
           cmake --build build --parallel 3 --target arm_cpu_guest_tests lichii-cmd
-          for binary in build/bin/arm_cpu_guest_tests build/bin/eden-cli; do
+          for binary in build/bin/arm_cpu_guest_tests build/bin/hoochii-cli; do
             codesign --verify --strict "$binary"
             codesign -d --entitlements - "$binary" | grep -F com.apple.security.hypervisor
             if otool -L "$binary" | grep -F /usr/lib/libhvf.dylib; then
@@ -404,22 +404,22 @@ jobs:
           ccache --show-stats -v
           ccache --evict-older-than "$(( $(date +%s) - start + 60 ))s"
 
-      # nxformat is linked statically: lichii.exe must not need an nxformat.dll, which Windows
+      # nxformat is linked statically: hoochii.exe must not need an nxformat.dll, which Windows
       # may refuse to load (Smart App Control, code integrity policies) or that may be missing.
-      - name: Check lichii.exe does not import nxformat.dll
+      - name: Check hoochii.exe does not import nxformat.dll
         run: |
-          imports=$("$LLVM_ROOT/bin/llvm-readobj" --coff-imports build/bin/lichii.exe |
+          imports=$("$LLVM_ROOT/bin/llvm-readobj" --coff-imports build/bin/hoochii.exe |
             awk '/^(Import|DelayImport) {/ { kind = $1 } /^  Name:/ { print kind, $2 }')
           echo "$imports"
           if grep -qi ' nxformat.dll$' <<< "$imports"; then
-            echo "::error::lichii.exe imports nxformat.dll; nxformat must be linked statically"
+            echo "::error::hoochii.exe imports nxformat.dll; nxformat must be linked statically"
             exit 1
           fi
 
       # Antivirus heuristics count an unsigned program without file metadata against it.
       - name: Check the shipped programs carry a version resource
         run: |
-          for exe in lichii eden-cli lichii-updater; do
+          for exe in hoochii hoochii-cli hoochii-updater; do
             if ! grep -q 'Type: VERSIONINFO' <<< "$("$LLVM_ROOT/bin/llvm-readobj" --coff-resources "build/bin/$exe.exe")"; then
               echo "::error::$exe.exe has no version resource"
               exit 1

@@ -5,13 +5,14 @@
 
 #pragma once
 
-// Lichii data directories
+// Hoochii data directories
 
-#define EDEN_DIR "lichii"
+#define EDEN_DIR "hoochii"
+#define LICHII_LEGACY_DIR "lichii"
 #define EDEN_LEGACY_DIR "eden"
 #define PORTABLE_DIR "user"
 
-// Sub-directories contained within a Lichii data directory
+// Sub-directories contained within a Hoochii data directory
 #define AMIIBO_DIR "amiibo"
 #define CACHE_DIR "cache"
 #define CONFIG_DIR "config"

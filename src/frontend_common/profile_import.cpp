@@ -39,7 +39,8 @@ bool NeedsLegacyProfileImport() {
     if (state != Migration::State::Unresolved) {
         return false;
     }
-    constexpr std::array sources{LegacyEdenDir, CitronDir, SudachiDir, SuyuDir, YuzuDir};
+    constexpr std::array sources{LegacyLichiiDir, LegacyEdenDir, CitronDir, SudachiDir, SuyuDir,
+                                 YuzuDir};
     for (const auto source : sources) {
         if (fs::is_directory(GetLegacyPath(source))) {
             return true;
@@ -52,8 +53,8 @@ bool NeedsLegacyProfileImport() {
 void CheckLegacyProfileBeforeConfig() {
     if (NeedsLegacyProfileImport()) {
         throw std::runtime_error("Legacy emulator data or an unfinished import was found. "
-                                 "Open the Lichii GUI to import it or explicitly start fresh "
-                                 "before using eden-cli. No configuration was created.");
+                                 "Open the Hoochii GUI to import it or explicitly start fresh "
+                                 "before using hoochii-cli. No configuration was created.");
     }
 }
 

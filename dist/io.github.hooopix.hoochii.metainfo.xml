@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.hooopix.hoochii</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <name>Hoochii</name>
+  <summary>Open-source Nintendo Switch and Switch 2 emulator</summary>
+  <description>
+    <p>Hoochii is an open-source, high-performance emulator for Nintendo Switch and Switch 2, built on top of Lichii, Eglantine, and Eden. Compatibility and performance vary by game and hardware.</p>
+  </description>
+  <launchable type="desktop-id">io.github.hooopix.hoochii.desktop</launchable>
+  <provides><binary>hoochii</binary></provides>
+  <categories><category>Game</category><category>Emulator</category></categories>
+  <url type="homepage">https://github.com/Hooopix/Hoochii</url>
+  <url type="bugtracker">https://github.com/Hooopix/Hoochii/issues</url>
+  <project_license>GPL-3.0-or-later</project_license>
+  <developer_name>Hoochii contributors</developer_name>
+  <content_rating type="oars-1.0"/>
+</component>
