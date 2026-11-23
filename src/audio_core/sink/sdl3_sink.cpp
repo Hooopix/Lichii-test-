@@ -208,15 +208,20 @@ private:
                 return;
             }
 
-            std::vector<s16> input(bytes_available / static_cast<int>(sizeof(s16)));
-            const int bytes_read = SDL_GetAudioStreamData(stream, input.data(), bytes_available);
+            const std::size_t sample_count =
+                static_cast<std::size_t>(bytes_available) / sizeof(s16);
+            if (impl->callback_buffer.size() < sample_count) {
+                impl->callback_buffer.resize(sample_count);
+            }
+            const int bytes_read =
+                SDL_GetAudioStreamData(stream, impl->callback_buffer.data(), bytes_available);
             if (bytes_read <= 0) {
                 return;
             }
 
             const std::size_t num_frames =
                 static_cast<std::size_t>(bytes_read) / sizeof(s16) / frame_size;
-            std::span<const s16> input_buffer{input.data(),
+            std::span<const s16> input_buffer{impl->callback_buffer.data(),
                                               static_cast<std::size_t>(bytes_read) / sizeof(s16)};
             impl->ProcessAudioIn(input_buffer, num_frames);
         } else {
@@ -225,17 +230,24 @@ private:
             }
 
             const int bytes_requested = additional_amount > 0 ? additional_amount : total_amount;
-            std::vector<s16> output(bytes_requested / static_cast<int>(sizeof(s16)));
+            const std::size_t sample_count =
+                static_cast<std::size_t>(bytes_requested) / sizeof(s16);
+            if (impl->callback_buffer.size() < sample_count) {
+                impl->callback_buffer.resize(sample_count);
+            }
             const std::size_t num_frames =
                 static_cast<std::size_t>(bytes_requested) / sizeof(s16) / frame_size;
-            std::span<s16> output_buffer{output.data(), output.size()};
+            std::span<s16> output_buffer{impl->callback_buffer.data(), sample_count};
             impl->ProcessAudioOutAndRender(output_buffer, num_frames);
-            static_cast<void>(SDL_PutAudioStreamData(stream, output.data(), bytes_requested));
+            static_cast<void>(
+                SDL_PutAudioStreamData(stream, impl->callback_buffer.data(), bytes_requested));
         }
     }
 
     /// SDL stream attached to an opened input/output device
     SDL_AudioStream* stream{};
+    /// Reusable audio callback scratch buffer to avoid heap allocations on the RT audio thread
+    std::vector<s16> callback_buffer;
 };
 
 /// Configure the selected device name for both playback and capture streams.

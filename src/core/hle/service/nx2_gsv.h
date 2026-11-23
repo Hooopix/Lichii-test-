@@ -89,6 +89,7 @@
 #include "core/hle/service/nx2_video_input_queue.h"
 #include "core/hle/service/nx2_present_pacer.h"
 #include "core/hle/service/nx2_video_ready.h"
+#include "core/hle/service/os/multi_wait_utils.h"
 #include "core/hle/service/sm/sm.h"
 #include "core/hle/service/server_manager.h"
 #include "core/hle/service/service.h"
@@ -1716,16 +1717,20 @@ private:
             buffer.HintCold(range.physical_offset, range.size, range.virtual_address);
         }
     }
+    std::mutex m_cold_hint_mutex;
+    std::condition_variable_any m_cold_hint_cv;
     std::jthread m_cold_hint_thread{[this](std::stop_token stop) {
         Common::SetCurrentThreadName("nx2:ColdHint");
         Common::SetCurrentThreadPriority(Common::ThreadPriority::Low);
+        std::unique_lock lk{m_cold_hint_mutex};
         while (!stop.stop_requested()) {
-            for (int i = 0; i < 30 && !stop.stop_requested(); ++i) {
-                std::this_thread::sleep_for(std::chrono::seconds{1});
+            if (m_cold_hint_cv.wait_for(lk, stop, std::chrono::seconds{30},
+                                        [&stop] { return stop.stop_requested(); })) {
+                break;
             }
-            if (!stop.stop_requested()) {
-                HintColdBacking();
-            }
+            lk.unlock();
+            HintColdBacking();
+            lk.lock();
         }
     }};
 };
@@ -4004,15 +4009,11 @@ private:
             return;
         }
         auto& syncpoints = system.Host1x().GetSyncpointManager();
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds{100};
-        while (!syncpoints.IsReadyGuest(fence.syncpoint, fence.value) &&
-               std::chrono::steady_clock::now() < deadline) {
-            std::this_thread::sleep_for(std::chrono::milliseconds{1});
-        }
+        const bool reached =
+            syncpoints.WaitGuestFor(fence.syncpoint, fence.value, std::chrono::milliseconds{100});
         if (Nx2VideoTraceEnabled()) {
             LOG_INFO(Service, "nx2:vdec trace release wait syncpoint={} value={} reached={}",
-                     fence.syncpoint, fence.value,
-                     syncpoints.IsReadyGuest(fence.syncpoint, fence.value));
+                     fence.syncpoint, fence.value, reached);
         }
     }
 
@@ -4335,10 +4336,20 @@ public:
 
     ~INx2GraphicsSystemSession() override {
         if (m_syncpt_memory != nullptr) {
-            system.Host1x().GetSyncpointManager().SetGuestMirror({});
+            system.Host1x().GetSyncpointManager().SetGuestMirror({}, {});
         }
         if (m_syncpt_poll) {
             system.CoreTiming().UnscheduleEvent(m_syncpt_poll);
+        }
+        m_syncpt_stopping.store(true, std::memory_order_release);
+        if (m_syncpt_stop_event != nullptr) {
+            m_syncpt_stop_event->Signal(system.Kernel());
+        }
+        if (m_syncpt_thread.joinable()) {
+            m_syncpt_thread.join();
+        }
+        if (m_syncpt_stop_event != nullptr) {
+            m_context.CloseEvent(m_syncpt_stop_event);
         }
         for (auto* event : m_syncpt_events) {
             if (event != nullptr) {
@@ -4487,23 +4498,50 @@ private:
         LOG_WARNING(Service, "(STUBBED) nx2:gsv TIPC 204, version={} max_syncpoints={:#x}",
                     version_requested, max_syncpoints);
 
+        if (m_syncpt_events[0] == nullptr) {
+            m_syncpt_events[0] = m_context.CreateEvent("nx2:gsv:SyncptRequest");
+            m_syncpt_events[1] = m_context.CreateEvent("nx2:gsv:SyncptNotify");
+            m_syncpt_stop_event = m_context.CreateEvent("nx2:gsv:SyncptStop");
+        }
+
         auto rw = ctx.GetObjectFromHandle<Kernel::KTransferMemory>(ctx.GetCopyHandle(0));
         auto ro = ctx.GetObjectFromHandle<Kernel::KTransferMemory>(ctx.GetCopyHandle(1));
         if (rw.IsNotNull() && ro.IsNotNull() && ro->GetSize() >= 0x2000) {
-            m_syncpt_memory = &ro->GetOwner()->GetMemory();
-            m_syncpt_rw = GetInteger(rw->GetSourceAddress());
-            m_syncpt_ro = GetInteger(ro->GetSourceAddress());
-            m_syncpt_count = max_syncpoints;
-            auto& memory = *m_syncpt_memory;
-            memory.Write32(m_syncpt_ro + 0x00, 1); // version
-            memory.Write32(m_syncpt_ro + 0x04, 0); // base id (guess)
-            memory.Write32(m_syncpt_ro + 0x08, max_syncpoints);
-            memory.Write32(m_syncpt_ro + 0x0c, SyncptValuesOffset);
-            memory.Write32(m_syncpt_ro + 0x10, SyncptRwSummaryOffset);
-            memory.Write32(m_syncpt_ro + 0x14, SyncptRoSummaryOffset);
-            memory.Write32(m_syncpt_ro + 0x18, SyncptRwBitsOffset);
-            memory.Write32(m_syncpt_ro + 0x1c, SyncptRoBitsOffset);
-            UpdateSyncptValues();
+            {
+                std::scoped_lock lk{m_syncpt_mutex};
+                m_syncpt_memory = &ro->GetOwner()->GetMemory();
+                m_syncpt_rw = GetInteger(rw->GetSourceAddress());
+                m_syncpt_ro = GetInteger(ro->GetSourceAddress());
+                m_syncpt_count = max_syncpoints;
+                auto& memory = *m_syncpt_memory;
+                memory.Write32(m_syncpt_ro + 0x00, 1); // version
+                memory.Write32(m_syncpt_ro + 0x04, 0); // base id (guess)
+                memory.Write32(m_syncpt_ro + 0x08, max_syncpoints);
+                memory.Write32(m_syncpt_ro + 0x0c, SyncptValuesOffset);
+                memory.Write32(m_syncpt_ro + 0x10, SyncptRwSummaryOffset);
+                memory.Write32(m_syncpt_ro + 0x14, SyncptRoSummaryOffset);
+                memory.Write32(m_syncpt_ro + 0x18, SyncptRwBitsOffset);
+                memory.Write32(m_syncpt_ro + 0x1c, SyncptRoBitsOffset);
+                const u32 words = (m_syncpt_count + 63) / 64;
+                m_syncpt_ro_bits.fill(0);
+                for (auto& word : m_syncpt_armed_bits) {
+                    word.store(0, std::memory_order_relaxed);
+                }
+                for (u32 w = 0; w < words; ++w) {
+                    m_syncpt_ro_bits[w] =
+                        memory.Read64(m_syncpt_ro + SyncptRoBitsOffset + w * 8);
+                }
+                m_syncpt_fallback_armed = false;
+                UpdateSyncptValues();
+            }
+            if (!m_syncpt_poll) {
+                m_syncpt_poll = Core::Timing::CreateEvent(
+                    "nx2:gsv:SyncptFallback",
+                    [this](s64, std::chrono::nanoseconds) -> std::optional<std::chrono::nanoseconds> {
+                        PollSyncpts();
+                        return std::nullopt;
+                    });
+            }
             // Mirror each guest increment as it happens, before the waits it meets are answered:
             // the client's TryWaitNativeSync reads this page, and a client woken by an answered
             // wait (nx2:syncpt 201) before the next poll read the old value. Yoshi and the
@@ -4514,25 +4552,38 @@ private:
                     if (id < count) {
                         memory->Write64(values + u64{id} * 8, value);
                     }
+                },
+                [this](u32 id, u32 value) {
+                    const u32 word = id / 64;
+                    if (word >= m_syncpt_armed_bits.size()) {
+                        return;
+                    }
+                    std::atomic_thread_fence(std::memory_order_seq_cst);
+                    if ((m_syncpt_armed_bits[word].load(std::memory_order_acquire) &
+                         (u64{1} << (id % 64))) == 0) {
+                        return;
+                    }
+                    OnSyncptIncremented(id, value);
                 });
-            if (!m_syncpt_poll) {
-                m_syncpt_poll = Core::Timing::CreateEvent(
-                    "nx2:gsv:SyncptPoll",
-                    [this](s64, std::chrono::nanoseconds) -> std::optional<std::chrono::nanoseconds> {
-                        PollSyncpts();
-                        return std::nullopt;
-                    });
-                system.CoreTiming().ScheduleLoopingEvent(SyncptPollInterval, SyncptPollInterval,
-                                                         m_syncpt_poll);
+            if (!m_syncpt_thread.joinable()) {
+                m_syncpt_stopping.store(false, std::memory_order_release);
+                m_syncpt_thread = system.Kernel().RunOnHostCoreThread("nx2:gsv:Syncpt", [this] {
+                    while (!m_syncpt_stopping.load(std::memory_order_acquire)) {
+                        const int index = WaitAny(system.Kernel(),
+                                                  &m_syncpt_stop_event->GetReadableEvent(),
+                                                  &m_syncpt_events[0]->GetReadableEvent());
+                        if (index != 1) {
+                            break;
+                        }
+                        m_syncpt_events[0]->Clear(system.Kernel());
+                        OnSyncptRequest();
+                    }
+                });
             }
         } else {
             LOG_ERROR(Service, "nx2:gsv TIPC 204: missing syncpt transfer memory");
         }
 
-        if (m_syncpt_events[0] == nullptr) {
-            m_syncpt_events[0] = m_context.CreateEvent("nx2:gsv:SyncptRequest");
-            m_syncpt_events[1] = m_context.CreateEvent("nx2:gsv:SyncptNotify");
-        }
         IPC::ResponseBuilder rb{ctx, 2, 2, 0};
         rb.Push(ResultSuccess);
         rb.PushCopyObjects(ctx, *m_syncpt_events[0]); // signalled by the client
@@ -4561,34 +4612,155 @@ private:
         return changed;
     }
 
-    // Answers every armed wait: the value page is current, so the client rechecks its threshold
-    // and rearms if it still has to wait. Acknowledging without a value change costs the client a
-    // wakeup per poll, which keeps waits whose syncpoint we never see from hanging.
-    void PollSyncpts() {
-        if (m_syncpt_memory == nullptr) {
-            return;
-        }
-        const u32 words = (m_syncpt_count + 63) / 64;
-        std::array<u64, 0x40> armed{};
+    // Checks whether any armed bit in `diff` corresponds to a syncpoint whose guest value already
+    // advanced past what we last acknowledged, or to an untracked syncpoint (>= HostSyncpoints).
+    bool HasReadyOrUntrackedArmedLocked(const std::array<u64, 0x40>& diff, u32 words) const {
+        const auto& manager = system.Host1x().GetSyncpointManager();
         for (u32 w = 0; w < words; ++w) {
-            armed[w] = m_syncpt_memory->Read64(m_syncpt_rw + SyncptRwBitsOffset + w * 8);
+            u64 bits = diff[w];
+            while (bits != 0) {
+                const u32 bit = static_cast<u32>(std::countr_zero(bits));
+                bits &= bits - 1;
+                const u32 id = w * 64 + bit;
+                if (id >= HostSyncpoints ||
+                    manager.GetGuestSyncpointValue(id) != m_syncpt_polled_values[id]) {
+                    return true;
+                }
+            }
         }
-        std::array<u64, 0x40> changed_ids{};
-        UpdateSyncptValues(&changed_ids);
-        bool acked = false;
+        return false;
+    }
+
+    void AcknowledgeArmedLocked(const std::array<u64, 0x40>& rw, u32 words) {
+        const auto& manager = system.Host1x().GetSyncpointManager();
         for (u32 w = 0; w < words; ++w) {
-            const u64 ro_address = m_syncpt_ro + SyncptRoBitsOffset + w * 8;
-            if (m_syncpt_memory->Read64(ro_address) != armed[w]) {
-                m_syncpt_memory->Write64(ro_address, armed[w]);
-                acked = true;
+            const u64 diff = rw[w] ^ m_syncpt_ro_bits[w];
+            u64 bits = diff;
+            while (bits != 0) {
+                const u32 bit = static_cast<u32>(std::countr_zero(bits));
+                bits &= bits - 1;
+                const u32 id = w * 64 + bit;
+                if (id < HostSyncpoints) {
+                    m_syncpt_polled_values[id] = manager.GetGuestSyncpointValue(id);
+                }
             }
-            if (w < changed_ids.size() && (armed[w] & changed_ids[w]) != 0) {
-                acked = true;
+            if (diff != 0) {
+                m_syncpt_memory->Write64(m_syncpt_ro + SyncptRoBitsOffset + w * 8, rw[w]);
+                m_syncpt_ro_bits[w] = rw[w];
             }
+            m_syncpt_armed_bits[w].store(0, std::memory_order_release);
         }
         m_syncpt_memory->Write64(m_syncpt_ro + SyncptRoSummaryOffset,
                                  m_syncpt_memory->Read64(m_syncpt_rw + SyncptRwSummaryOffset));
-        if (acked) {
+        m_syncpt_fallback_armed = false;
+    }
+
+    // Guest signalled SyncptRequest after toggling RW armed bits. Acknowledge immediately if a
+    // tracked syncpoint already advanced (or is untracked); otherwise arm zero-overhead wakeups
+    // from IncrementGuest and a one-shot fallback timer so untracked waits cannot hang.
+    void OnSyncptRequest() {
+        bool should_signal = false;
+        bool schedule_fallback = false;
+        {
+            std::scoped_lock lk{m_syncpt_mutex};
+            if (m_syncpt_memory == nullptr) {
+                return;
+            }
+            const u32 words = (m_syncpt_count + 63) / 64;
+            std::array<u64, 0x40> rw{};
+            std::array<u64, 0x40> diff{};
+            bool any_armed = false;
+            for (u32 w = 0; w < words; ++w) {
+                rw[w] = m_syncpt_memory->Read64(m_syncpt_rw + SyncptRwBitsOffset + w * 8);
+                diff[w] = rw[w] ^ m_syncpt_ro_bits[w];
+                any_armed |= diff[w] != 0;
+            }
+            if (!any_armed) {
+                return;
+            }
+            if (HasReadyOrUntrackedArmedLocked(diff, words)) {
+                AcknowledgeArmedLocked(rw, words);
+                should_signal = true;
+            } else {
+                for (u32 w = 0; w < words; ++w) {
+                    m_syncpt_armed_bits[w].store(diff[w], std::memory_order_seq_cst);
+                }
+                std::atomic_thread_fence(std::memory_order_seq_cst);
+                if (HasReadyOrUntrackedArmedLocked(diff, words)) {
+                    AcknowledgeArmedLocked(rw, words);
+                    should_signal = true;
+                } else if (!m_syncpt_fallback_armed) {
+                    m_syncpt_fallback_armed = true;
+                    schedule_fallback = true;
+                }
+            }
+        }
+        if (should_signal) {
+            m_syncpt_events[1]->Signal(system.Kernel());
+        } else if (schedule_fallback && m_syncpt_poll) {
+            system.CoreTiming().ScheduleEvent(SyncptFallbackInterval, m_syncpt_poll);
+        }
+    }
+
+    void OnSyncptIncremented(u32 id, u32 value) {
+        bool should_signal = false;
+        {
+            std::scoped_lock lk{m_syncpt_mutex};
+            if (m_syncpt_memory == nullptr) {
+                return;
+            }
+            const u32 words = (m_syncpt_count + 63) / 64;
+            std::array<u64, 0x40> rw{};
+            bool any_armed = false;
+            for (u32 w = 0; w < words; ++w) {
+                rw[w] = m_syncpt_memory->Read64(m_syncpt_rw + SyncptRwBitsOffset + w * 8);
+                any_armed |= (rw[w] ^ m_syncpt_ro_bits[w]) != 0;
+            }
+            if (id < HostSyncpoints) {
+                m_syncpt_polled_values[id] = value;
+            }
+            if (any_armed) {
+                AcknowledgeArmedLocked(rw, words);
+                should_signal = true;
+            } else {
+                for (u32 w = 0; w < words; ++w) {
+                    m_syncpt_armed_bits[w].store(0, std::memory_order_release);
+                }
+            }
+        }
+        if (should_signal) {
+            m_syncpt_events[1]->Signal(system.Kernel());
+        }
+    }
+
+    // One-shot fallback for armed waits that saw no IncrementGuest within SyncptFallbackInterval:
+    // acknowledges all armed bits so the client rechecks its threshold (keeps waits whose syncpoint
+    // we never see from hanging) without running any timer while idle.
+    void PollSyncpts() {
+        bool should_signal = false;
+        {
+            std::scoped_lock lk{m_syncpt_mutex};
+            if (m_syncpt_memory == nullptr) {
+                return;
+            }
+            m_syncpt_fallback_armed = false;
+            const u32 words = (m_syncpt_count + 63) / 64;
+            std::array<u64, 0x40> rw{};
+            bool any_armed = false;
+            for (u32 w = 0; w < words; ++w) {
+                rw[w] = m_syncpt_memory->Read64(m_syncpt_rw + SyncptRwBitsOffset + w * 8);
+                any_armed |= (rw[w] ^ m_syncpt_ro_bits[w]) != 0;
+            }
+            if (any_armed) {
+                AcknowledgeArmedLocked(rw, words);
+                should_signal = true;
+            } else {
+                for (u32 w = 0; w < words; ++w) {
+                    m_syncpt_armed_bits[w].store(0, std::memory_order_release);
+                }
+            }
+        }
+        if (should_signal) {
             m_syncpt_events[1]->Signal(system.Kernel());
         }
     }
@@ -5053,17 +5225,24 @@ private:
         ReturnRawSession(system, ctx, std::move(nvsrv));
     }
 
-    static constexpr std::chrono::nanoseconds SyncptPollInterval{std::chrono::microseconds{500}};
+    static constexpr std::chrono::nanoseconds SyncptFallbackInterval{std::chrono::milliseconds{4}};
 
     std::shared_ptr<Nx2NativeObjects> m_objects{std::make_shared<Nx2NativeObjects>()};
     KernelHelpers::ServiceContext m_context;
+    std::mutex m_syncpt_mutex;
     std::array<Kernel::KEvent*, 2> m_syncpt_events{};
+    Kernel::KEvent* m_syncpt_stop_event{};
     Core::Memory::Memory* m_syncpt_memory{};
     u64 m_syncpt_rw{};
     u64 m_syncpt_ro{};
     u32 m_syncpt_count{};
     std::array<u32, HostSyncpoints> m_syncpt_polled_values{};
+    std::array<u64, 0x40> m_syncpt_ro_bits{};
+    std::array<std::atomic<u64>, 0x40> m_syncpt_armed_bits{};
+    bool m_syncpt_fallback_armed{};
+    std::atomic<bool> m_syncpt_stopping{};
     std::shared_ptr<Core::Timing::EventType> m_syncpt_poll;
+    std::jthread m_syncpt_thread;
 };
 
 } // namespace Service

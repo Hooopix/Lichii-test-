@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <algorithm>
+#include <cstring>
 #include <unordered_set>
 #include <utility>
 
 #include "common/fs/file_lock.h"
 #include "common/fs/path_util.h"
 #include "common/logging.h"
+#include "common/scope_exit.h"
 #include "video_core/pipeline_cache_files.h"
 #include "video_core/shader_cache_v2/cache_file.h"
 #include "video_core/shader_cache_v2/driver_blobs.h"
@@ -155,29 +157,65 @@ DriverBlobStore::~DriverBlobStore() {
 }
 
 std::optional<std::vector<u8>> DriverBlobStore::Find(RecordKind kind, u64 key) {
-    std::scoped_lock lock{mutex};
-    const auto it = index.find({kind, key});
-    if (closed || it == index.end() || it->second.state != State::Stored) {
-        return std::nullopt;
+    u64 offset{};
+    u32 payload_size{};
+    {
+        std::scoped_lock lock{mutex};
+        const auto it = index.find({kind, key});
+        if (closed || it == index.end() || it->second.state != State::Stored) {
+            return std::nullopt;
+        }
+        const Entry& entry = it->second;
+        if (!reader.IsOpen()) {
+            // A new file: opened once it holds a blob of this session
+            reader.Open(file, Common::FS::FileAccessMode::Read, Common::FS::FileType::BinaryFile,
+                        Common::FS::FileShareFlag::ShareReadWrite);
+        }
+        if (!reader.IsOpen()) {
+            return std::nullopt;
+        }
+        offset = entry.offset;
+        payload_size = entry.payload_size;
+        ++active_reads;
     }
-    Entry& entry = it->second;
-    if (!reader.IsOpen()) {
-        // A new file: opened once it holds a blob of this session
-        reader.Open(file, Common::FS::FileAccessMode::Read, Common::FS::FileType::BinaryFile,
-                    Common::FS::FileShareFlag::ShareReadWrite);
+    SCOPE_EXIT {
+        std::scoped_lock lock{mutex};
+        if (--active_reads == 0 && closed) {
+            reads_done_cv.notify_all();
+        }
+    };
+
+    std::vector<u8> bytes(RecordHeaderSize + payload_size + RecordHashSize);
+    bool read_ok = false;
+#ifdef _WIN32
+    {
+        std::scoped_lock read_lock{reader_mutex};
+        read_ok = reader.Seek(static_cast<s64>(offset)) &&
+                  reader.ReadSpan(std::span<u8>{bytes}) == bytes.size();
     }
-    std::vector<u8> bytes(RecordHeaderSize + entry.payload_size + RecordHashSize);
+#else
+    read_ok = reader.ReadAt(offset, std::span<u8>{bytes}) == bytes.size();
+#endif
+
     std::optional<LogRecord> record;
-    if (reader.Seek(static_cast<s64>(entry.offset)) &&
-        reader.ReadSpan(std::span<u8>{bytes}) == bytes.size()) {
-        record = ParseRecord(bytes, entry.offset);
+    if (read_ok) {
+        record = ParseRecord(bytes, offset);
     }
-    if (!record || record->kind != kind || record->key != key) {
-        entry.state = State::Rejected;
-        rejected.fetch_add(1, std::memory_order_relaxed);
+    if (!record || record->kind != kind || record->key != key ||
+        record->payload.size() != payload_size) {
+        std::scoped_lock lock{mutex};
+        if (const auto it = index.find({kind, key});
+            it != index.end() && it->second.state == State::Stored && it->second.offset == offset) {
+            it->second.state = State::Rejected;
+            rejected.fetch_add(1, std::memory_order_relaxed);
+        }
         return std::nullopt;
     }
-    return std::vector<u8>(record->payload.begin(), record->payload.end());
+    if (payload_size > 0) {
+        std::memmove(bytes.data(), bytes.data() + RecordHeaderSize, payload_size);
+    }
+    bytes.resize(payload_size);
+    return bytes;
 }
 
 void DriverBlobStore::Used(RecordKind kind, u64 key) {
@@ -256,9 +294,11 @@ void DriverBlobStore::Close() {
     std::unique_lock lock{mutex};
     if (closed || !writer) {
         closed = true;
+        reads_done_cv.wait(lock, [this] { return active_reads == 0; });
         return;
     }
     closed = true;
+    reads_done_cv.wait(lock, [this] { return active_reads == 0; });
     // Before the compaction: Windows doesn't rename over a file that is open.
     reader.Close();
     u64 max_bytes = options.max_bytes;

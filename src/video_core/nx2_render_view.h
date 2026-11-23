@@ -100,7 +100,7 @@ struct EngineValues {
 struct Packet {
     std::vector<u32> seed; ///< the whole register file, when the view starts over
     boost::container::small_vector<RegPair, 16> words;
-    std::vector<BindValue> binds;
+    boost::container::small_vector<BindValue, 8> binds;
     Flags consumed; ///< forwarded flags the previous draw cleared
     Flags raised;
     Flags cleared;

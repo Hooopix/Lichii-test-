@@ -4,6 +4,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <functional>
 #include <list>
@@ -66,9 +67,10 @@ public:
     /// Called with a syncpoint's new guest value on every guest increment, before the value is
     /// published and the actions it meets run (empty to stop). Switch 2 clients read syncpoint
     /// values from a page the gsv service fills, and an action may wake a client that reads it
-    /// right away.
+    /// right away. Optional `notify` runs after the syncpoint guard is released so it may signal
+    /// kernel events safely without holding `guard`.
     using GuestMirror = std::function<void(u32 syncpoint_id, u32 value)>;
-    void SetGuestMirror(GuestMirror mirror);
+    void SetGuestMirror(GuestMirror mirror, GuestMirror notify = {});
 
     /// Runs func with guest increments held off, so a copy of the guest values it makes can't
     /// overwrite a newer value the mirror wrote.
@@ -81,6 +83,8 @@ public:
     void IncrementHost(u32 syncpoint_id);
 
     void WaitGuest(u32 syncpoint_id, u32 expected_value);
+
+    bool WaitGuestFor(u32 syncpoint_id, u32 expected_value, std::chrono::nanoseconds timeout);
 
     void WaitHost(u32 syncpoint_id, u32 expected_value);
 
@@ -120,8 +124,10 @@ private:
 
     std::mutex guard;
     u64 last_action_id{};
-    GuestMirror guest_mirror;             ///< Guarded by `guard`.
-    std::vector<DueActions*> due_actions; ///< Guarded by `guard`.
+    GuestMirror guest_mirror;                     ///< Guarded by `guard`.
+    GuestMirror guest_mirror_notify;              ///< Guarded by `guard`, invoked outside `guard`.
+    std::vector<std::thread::id> mirror_notify_threads; ///< Guarded by `guard`.
+    std::vector<DueActions*> due_actions;         ///< Guarded by `guard`.
     std::condition_variable wait_guest_cv;
     std::condition_variable wait_host_cv;
     std::condition_variable action_done_cv;

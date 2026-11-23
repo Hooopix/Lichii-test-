@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: Copyright 2026 Lichii Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include <atomic>
+#include <thread>
+#include <vector>
+
 #include <catch2/catch_test_macros.hpp>
 #include "common/fs/file.h"
 #include "common/fs/path_util.h"
@@ -99,6 +103,96 @@ TEST_CASE("Real VFS can rename a directory", "[core][vfs]") {
     const auto via_dir = dir->GetFile("inside.bin");
     REQUIRE(via_dir);
     CHECK(via_dir->ReadByte(0) == 0x7A);
+}
+
+#ifndef _WIN32
+TEST_CASE("IOFile ReadAt and WriteAt perform positional I/O", "[core][vfs]") {
+    const Tests::TempDir temp{"lichii-vfs"};
+    const auto path = temp / "positional.bin";
+    {
+        Common::FS::IOFile creator{path, Common::FS::FileAccessMode::Write,
+                                   Common::FS::FileType::BinaryFile};
+        REQUIRE(creator.IsOpen());
+    }
+    Common::FS::IOFile file{path, Common::FS::FileAccessMode::ReadWrite,
+                            Common::FS::FileType::BinaryFile};
+    REQUIRE(file.IsOpen());
+
+    const std::vector<u8> second{0x10, 0x20, 0x30, 0x40};
+    const std::vector<u8> first{0xAA, 0xBB, 0xCC, 0xDD};
+    REQUIRE(file.WriteAt(4, second) == second.size());
+    REQUIRE(file.WriteAt(0, first) == first.size());
+
+    std::vector<u8> buf(8, 0);
+    REQUIRE(file.ReadAt(0, buf) == buf.size());
+    CHECK(buf == std::vector<u8>{0xAA, 0xBB, 0xCC, 0xDD, 0x10, 0x20, 0x30, 0x40});
+
+    std::vector<u8> tail(4, 0);
+    REQUIRE(file.ReadAt(6, tail) == 2);
+    CHECK(tail[0] == 0x30);
+    CHECK(tail[1] == 0x40);
+}
+#endif
+
+TEST_CASE("RealVfsFile supports concurrent reads across multiple threads", "[core][vfs]") {
+    const Tests::TempDir temp{"lichii-vfs"};
+    const auto shared_path = Common::FS::PathToUTF8String(temp / "shared.bin");
+    const auto sibling_path = Common::FS::PathToUTF8String(temp / "sibling.bin");
+    FileSys::RealVfsFilesystem fs;
+
+    constexpr size_t NumBlocks = 4;
+    constexpr size_t BlockSize = 4096;
+    {
+        const auto writer = fs.CreateFile(shared_path);
+        REQUIRE(writer);
+        std::vector<u8> payload(NumBlocks * BlockSize);
+        for (size_t b = 0; b < NumBlocks; ++b) {
+            for (size_t i = 0; i < BlockSize; ++i) {
+                payload[b * BlockSize + i] = static_cast<u8>((b * 37 + i) & 0xff);
+            }
+        }
+        REQUIRE(writer->Write(payload.data(), payload.size(), 0) == payload.size());
+        const auto sibling = fs.CreateFile(sibling_path);
+        REQUIRE(sibling);
+        REQUIRE(sibling->WriteByte(0x5A));
+    }
+
+    const auto shared = fs.OpenFile(shared_path);
+    REQUIRE(shared);
+    REQUIRE(shared->GetSize() == NumBlocks * BlockSize);
+
+    std::atomic<bool> ok{true};
+    std::vector<std::thread> readers;
+    for (size_t b = 0; b < NumBlocks; ++b) {
+        readers.emplace_back([&, b] {
+            std::vector<u8> chunk(BlockSize);
+            for (int iter = 0; iter < 64; ++iter) {
+                if (shared->Read(chunk.data(), chunk.size(), b * BlockSize) != BlockSize) {
+                    ok = false;
+                    return;
+                }
+                for (size_t i = 0; i < BlockSize; ++i) {
+                    if (chunk[i] != static_cast<u8>((b * 37 + i) & 0xff)) {
+                        ok = false;
+                        return;
+                    }
+                }
+            }
+        });
+    }
+    readers.emplace_back([&] {
+        for (int iter = 0; iter < 64; ++iter) {
+            const auto sibling = fs.OpenFile(sibling_path);
+            if (!sibling || sibling->ReadByte(0) != 0x5A) {
+                ok = false;
+                return;
+            }
+        }
+    });
+    for (auto& t : readers) {
+        t.join();
+    }
+    REQUIRE(ok.load());
 }
 
 #ifdef _WIN32

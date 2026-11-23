@@ -89,9 +89,15 @@ void SyncpointManager::IncrementGuest(u32 syncpoint_id) {
               syncpoint_id);
 }
 
-void SyncpointManager::SetGuestMirror(GuestMirror mirror) {
-    std::scoped_lock lk(guard);
+void SyncpointManager::SetGuestMirror(GuestMirror mirror, GuestMirror notify) {
+    std::unique_lock lk(guard);
     guest_mirror = std::move(mirror);
+    guest_mirror_notify = std::move(notify);
+    const auto self = std::this_thread::get_id();
+    action_done_cv.wait(lk, [&] {
+        return std::ranges::all_of(mirror_notify_threads,
+                                   [self](const std::thread::id id) { return id == self; });
+    });
 }
 
 void SyncpointManager::IncrementHost(u32 syncpoint_id) {
@@ -103,6 +109,20 @@ void SyncpointManager::IncrementHost(u32 syncpoint_id) {
 
 void SyncpointManager::WaitGuest(u32 syncpoint_id, u32 expected_value) {
     Wait(syncpoints_guest[syncpoint_id], wait_guest_cv, expected_value);
+}
+
+bool SyncpointManager::WaitGuestFor(u32 syncpoint_id, u32 expected_value,
+                                    std::chrono::nanoseconds timeout) {
+    if (syncpoint_id >= NUM_MAX_SYNCPOINTS) {
+        return false;
+    }
+    auto& syncpoint = syncpoints_guest[syncpoint_id];
+    const auto pred = [&]() { return syncpoint.load(std::memory_order_acquire) >= expected_value; };
+    if (pred()) {
+        return true;
+    }
+    std::unique_lock lk(guard);
+    return wait_guest_cv.wait_for(lk, timeout, pred);
 }
 
 void SyncpointManager::WaitHost(u32 syncpoint_id, u32 expected_value) {
@@ -120,11 +140,30 @@ void SyncpointManager::Increment(std::atomic<u32>& syncpoint, std::condition_var
     }
     const u32 new_value{syncpoint.fetch_add(1, std::memory_order_acq_rel) + 1};
     wait_cv.notify_all();
+    GuestMirror notify;
+    const auto self = std::this_thread::get_id();
+    if (mirrored_id && guest_mirror_notify) {
+        notify = guest_mirror_notify;
+        mirror_notify_threads.push_back(self);
+    }
+    const auto finish_notify = [&] {
+        if (const auto it = std::ranges::find(mirror_notify_threads, self);
+            it != mirror_notify_threads.end()) {
+            mirror_notify_threads.erase(it);
+        }
+        action_done_cv.notify_all();
+    };
     auto end = action_storage.begin();
     while (end != action_storage.end() && end->expected_value <= new_value) {
         ++end;
     }
     if (end == action_storage.begin()) {
+        if (notify) {
+            lk.unlock();
+            notify(*mirrored_id, new_value);
+            lk.lock();
+            finish_notify();
+        }
         return;
     }
     // The due actions run in value order after the guard is released: the composite action can
@@ -134,6 +173,12 @@ void SyncpointManager::Increment(std::atomic<u32>& syncpoint, std::condition_var
     DueActions due;
     due.pending.splice(due.pending.end(), action_storage, action_storage.begin(), end);
     due_actions.push_back(&due);
+    if (notify) {
+        lk.unlock();
+        notify(*mirrored_id, new_value);
+        lk.lock();
+        finish_notify();
+    }
     while (!due.pending.empty()) {
         std::function<void()> action{std::move(due.pending.front().action)};
         due.running = due.pending.front().id;

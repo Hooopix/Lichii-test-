@@ -381,3 +381,48 @@ TEST_CASE("NX2 released memory loses the device addresses of the ranges inside i
     REQUIRE(registry.DeviceAddressOf(0x13800) == 0x300800U);
     REQUIRE(registry.DeviceAddressOf(0x14000) == 0x400000U);
 }
+
+TEST_CASE("NX2 mapping registry trims multi-range spans and preserves handle recency",
+          "[video_core][nx2_mapping]") {
+    Nx2GpuMemoryRegistry registry;
+    // Two non-overlapping GPU mappings aliasing the same (handle, offset): newer seq wins,
+    // even when mapped at a lower GPU address.
+    registry.MapAt(9, 0x0, 0x50000, 0x10000, 0x2000);
+    registry.MapAt(9, 0x0, 0x20000, 0x10000, 0x2000);
+    REQUIRE(registry.GpuAddressOf(9, 0x500) == 0x20500U);
+
+    // Multi-range trim spanning three adjacent mappings with partial left and right survivors.
+    registry.Reset();
+    registry.MapAt(1, 0x0, 0x10000, 0x10000, 0x4000);
+    registry.MapAt(2, 0x0, 0x14000, 0x20000, 0x4000);
+    registry.MapAt(3, 0x0, 0x18000, 0x30000, 0x4000);
+    registry.RecordDeviceRange(0x10000, 0x4000, 0x100000);
+    registry.RecordDeviceRange(0x20000, 0x4000, 0x200000);
+    registry.RecordDeviceRange(0x30000, 0x4000, 0x300000);
+
+    registry.Unmap(0x12000, 0x8000); // wipes [0x12000, 0x1a000)
+    REQUIRE(registry.DeviceAddressOfGpu(0x11fff) == 0x101fffU);
+    REQUIRE_FALSE(registry.DeviceAddressOfGpu(0x12000));
+    REQUIRE_FALSE(registry.DeviceAddressOfGpu(0x15000));
+    REQUIRE_FALSE(registry.DeviceAddressOfGpu(0x19fff));
+    REQUIRE(registry.DeviceAddressOfGpu(0x1a000) == 0x302000U);
+    REQUIRE(registry.GpuAddressOf(1, 0x1000) == 0x11000U);
+    REQUIRE_FALSE(registry.GpuAddressOf(1, 0x2000));
+    REQUIRE_FALSE(registry.GpuAddressOf(2, 0x0));
+    REQUIRE_FALSE(registry.GpuAddressOf(3, 0x1000));
+    REQUIRE(registry.GpuAddressOf(3, 0x2000) == 0x1a000U);
+
+    // Scale sanity: 1,000 mappings with O(log N) lookups and trims.
+    registry.Reset();
+    for (u64 i = 0; i < 1000; ++i) {
+        const u64 gpu = 0x100000 + i * 0x2000;
+        const u64 cpu = 0x1000000 + i * 0x2000;
+        registry.MapAt(static_cast<u32>(i + 1), 0, gpu, cpu, 0x1000);
+        registry.RecordDeviceRange(cpu, 0x1000, 0x2000000 + i * 0x2000);
+    }
+    REQUIRE(registry.DeviceAddressOfGpu(0x100000 + 500 * 0x2000 + 0x123) ==
+            0x2000000 + 500 * 0x2000 + 0x123);
+    registry.Unmap(0x100000 + 200 * 0x2000, 400 * 0x2000);
+    REQUIRE_FALSE(registry.DeviceAddressOfGpu(0x100000 + 500 * 0x2000));
+    REQUIRE(registry.DeviceAddressOfGpu(0x100000 + 600 * 0x2000) == 0x2000000 + 600 * 0x2000);
+}
