@@ -1,105 +1,74 @@
 <!--
+# SPDX-FileCopyrightText: Copyright 2026 Hoochii Emulator Project
 # SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
 # SPDX-License-Identifier: GPL-3.0-or-later
-
 # SPDX-License-Identifier: GPL-2.0-or-later
 -->
 
-<h2 align="center">⚠️ Lichii has no official website ⚠️</h2>
-
-> [!CAUTION]
-> **Lichii has no official website.** The only site run by this project is the **game compatibility website, [lichii.zortos.me](https://lichii.zortos.me)**, for compatibility reports only. Download Lichii **only** from this repository's [releases page](https://github.com/zortos293/Lichii/releases). Any other "Lichii" website or download (such as lichii.org) is not ours and may contain malware ([#545](https://github.com/zortos293/Lichii/issues/545)).
-
 <p align="center">
-  <img src="dist/branding/lichii_icon_with_logo.png" alt="Lichii" width="600">
+  <img src="dist/branding/hoochii_banner.png" alt="Hoochii" width="760">
 </p>
 
-# Lichii
+<h1 align="center">Hoochii</h1>
 
-[![Total downloads](https://img.shields.io/github/downloads/zortos293/Lichii/total)](https://github.com/zortos293/Lichii/releases) [![Latest release downloads](https://img.shields.io/github/downloads/zortos293/Lichii/latest/total)](https://github.com/zortos293/Lichii/releases) [![Latest release](https://img.shields.io/github/v/release/zortos293/Lichii)](https://github.com/zortos293/Lichii/releases)
+<p align="center">
+  An open-source, high-performance Nintendo Switch &amp; Switch 2 emulator written in C++
+</p>
 
-Lichii is an experimental, open-source Nintendo Switch and Switch 2 emulator written in C++. It builds on Eglantine, Eden, yuzu and Sudachi, preserving their contributions while developing this fork's game compatibility and renderer fixes.
+<p align="center">
+  <a href="https://github.com/Hooopix/Hoochii/releases"><img src="https://img.shields.io/github/v/release/Hooopix/Hoochii?color=FF6B4A&labelColor=0E1016" alt="Latest release"></a>
+  <a href="https://github.com/Hooopix/Hoochii/releases"><img src="https://img.shields.io/github/downloads/Hooopix/Hoochii/total?color=FFB347&labelColor=0E1016" alt="Total downloads"></a>
+  <a href="LICENSE.txt"><img src="https://img.shields.io/badge/license-GPL--3.0--or--later-FF6B4A?labelColor=0E1016" alt="License"></a>
+</p>
 
-This is an independent fork, not an official release of those upstream projects. Lichii is not affiliated with Nintendo.
+---
 
-Visit the [Lichii game compatibility website](https://lichii.zortos.me) to find games and compare community compatibility reports.
-
-## Downloads and setup
-
-Download Lichii only from this repository's [releases page](https://github.com/zortos293/Lichii/releases). Lichii has no other download site: archives offered elsewhere, such as lichii.org, are not built by this project, and one has been reported to install malware ([#545](https://github.com/zortos293/Lichii/issues/545)).
-
-On Windows, extract the entire build archive and run **lichii.exe**. Use homebrew you have permission to run, or your own games and system files dumped from a console you own, where permitted by applicable law. Games, keys and firmware are not included. The project does not provide download sources for them. Owning a console or game does not by itself establish permission to bypass access controls or redistribute its files.
-
-### Existing saves and settings
-
-Lichii uses its own profile: `%APPDATA%\lichii` on Windows, and the `lichii` directories under `$XDG_DATA_HOME`, `$XDG_CONFIG_HOME` and `$XDG_CACHE_HOME` on Linux and macOS. Without XDG overrides, these are `~/.local/share/lichii`, `~/.config/lichii` and `~/.cache/lichii`. An existing portable `user/` directory still takes priority and is not imported or changed by the wizard.
-
-On the first non-portable GUI launch, Lichii offers to import Eden and other detected emulator profiles. Back up `%APPDATA%\eden` first on Windows, or the old data, config and cache directories on Unix, and close the source emulator. Choose **Keep Old Data** to copy without changing the source, then check your saves and relaunch. Existing destination data is retained in backup directories rather than merged. Move also retains a source backup until you remove it yourself; Link deliberately shares settings and saves. Paths outside the imported data root remain shared and unchanged. An interrupted import offers recovery on the next launch. `eden-cli`, including `--help` and `--version`, refuses to initialize configuration until you import or explicitly choose **Start fresh** in the GUI.
-
-## Compatibility and issue reports
-
-Compatibility and performance vary by game, hardware and driver. Rendering errors, stutters and crashes remain possible. Passing automated tests does not establish that a game renders correctly, and this project makes no universal frame-rate guarantee.
-
-Browse [community compatibility reports](https://lichii.zortos.me/reports) for results with each player's build and setup.
-
-Desktop reporting requires a build containing [PR #303](https://github.com/zortos293/Lichii/pull/303) and is not available in build 88. In builds that include it, play and stop a Switch 2 game, then right-click that game and choose **Submit compatibility report**. Only the latest session in the current Lichii process is eligible.
-
-Confirm the matching website catalog entry and review the editable machine, game, setup, and enabled add-on details prefilled where available. Check the public preview and give explicit consent before submitting. Nothing uploads automatically, and the native v1 reporter does not read or upload logs or files.
-
-When [reporting an issue](https://github.com/zortos293/Eglantine/issues), include:
-
-- The exact build, game version, CPU, GPU and driver version.
-- Relevant settings and steps to reproduce the problem.
-- A screenshot and the log from the affected session, after checking it for personal information.
-
-Do not upload game files, keys, firmware or private account information. Bug bundles, GPU traces, shader dumps, pipeline caches and crash dumps can also contain game data. Do not attach them to public reports; ask a maintainer for handling instructions before sharing them. Plain-text logs should be checked for sensitive information before posting.
-
-## Building and contributing
-
-See the [build guide](docs/Build.md), [user documentation](docs/user/README.md) and [coding guidelines](docs/Coding.md). Some inherited documentation and internal build target names still use upstream names. The GUI build target is `lichii`; its output is `lichii.exe` on Windows and `lichii` on other desktop platforms.
-
-Keep changes focused and distinguish code-level checks from actual gameplay testing.
-
-## Artwork
-Art created by YOB (yobslab)
-The supplied Lichii logo, icon and library artwork are in [dist/branding](dist/branding). Windows, Linux and macOS icon resources are generated from that artwork by [Generate-LichiiIcons.ps1](tools/Generate-LichiiIcons.ps1).
-
-## Support Lichii
-
-Lichii is free and stays free. If you want to help, you can donate in crypto. Donations help pay for the AI tools and build machines used to develop this open-source project faster.
-
-**Solana (SOL)**
-```text
-JepEjfyWjGjhJvHSrqj52KtLjcbbbmUh1iGqerYBF4w
-```
-
-**Ethereum (ETH)**
-```text
-0x055ABa1b80Bc35C836Ce7E9F47c2b3d6C75b5534
-```
-
-**Bitcoin (BTC)**
-```text
-bc1qcvxdpf4qvdhqp8ee4s355cjmxrzsphsdwpl8w4
-```
-
-**BNB Smart Chain (BNB)**
-```text
-0x055ABa1b80Bc35C836Ce7E9F47c2b3d6C75b5534
-```
-
-**Polygon**
-```text
-0x055ABa1b80Bc35C836Ce7E9F47c2b3d6C75b5534
-```
-
-Send each coin on its matching network. Coins sent on the wrong network can't be recovered.
+**Hoochii** is an independent, open-source Nintendo Switch and Switch 2 emulator built in C++ with a custom Vulkan renderer, modern Qt 6 interface (**Hoochii Obsidian**), and continuous performance and correctness engineering. It builds upon the open-source lineage of Lichii, Eglantine, Eden, Sudachi, and yuzu while charting its own identity, polish, and optimization roadmap.
 
 > [!NOTE]
-> Donations are voluntary gifts and are non-refundable. A donation does not buy any product, service, perk, early access, exclusive build, priority support or say in the project. Every release stays free and public for everyone.
+> Hoochii is not affiliated with Nintendo. Use homebrew you have permission to run, or your own games and system files dumped from hardware you own, where permitted by applicable law. Games, keys, and firmware are not included.
 
-## Credits and license
+## Downloads & Setup
 
-Lichii inherits the work of the Eglantine, Eden, yuzu and Sudachi projects and their contributors, including Eglantine's original developer Camille LaVey. Upstream attribution and third-party license obligations continue to apply.
+Download official builds only from the [GitHub Releases](https://github.com/Hooopix/Hoochii/releases) page.
 
-See [LICENSE.txt](LICENSE.txt) and the source files for applicable license terms.
+- **Windows**: Extract the archive and launch **`hoochii.exe`** (or **`hoochii-cli.exe`** from a terminal).
+- **Linux**: Make the `.AppImage` executable (`chmod +x`) and run it, or extract the `.tar.gz` archive and run `hoochii` / `hoochii-cli`.
+- **macOS (Apple Silicon)**: Open **`hoochii.app`** (if Gatekeeper blocks an unsigned build, right-click → Open or run `xattr -dr com.apple.quarantine hoochii.app`).
+
+### Profile Data & Migration
+
+Hoochii stores its profile in a dedicated directory:
+
+- **Windows**: `%APPDATA%\hoochii`
+- **Linux & macOS**: `$XDG_DATA_HOME/hoochii`, `$XDG_CONFIG_HOME/hoochii`, and `$XDG_CACHE_HOME/hoochii` (defaulting to `~/.local/share/hoochii`, `~/.config/hoochii`, and `~/.cache/hoochii`)
+- **Portable mode**: A `user/` folder next to the executable takes priority and is left untouched.
+
+On first launch, Hoochii automatically detects existing **Lichii**, **Eden**, and other legacy profiles and offers a safe one-click import wizard (Copy, Move, Link, or Start Fresh). `hoochii-cli` waits until you complete or skip initial setup in the GUI before writing a fresh configuration.
+
+## Reporting Issues
+
+When [opening an issue](https://github.com/Hooopix/Hoochii/issues), please include:
+
+- The exact Hoochii build (from **Help → About Hoochii** or the top of `eden_log.txt`), game version, CPU, GPU, and driver version.
+- Relevant settings and clear steps to reproduce.
+- A screenshot and session log (checked for personal information).
+
+Do **not** upload game files, keys, firmware, or private account data. Bug bundles, GPU traces, shader dumps, and crash dumps can contain game assets—do not post them publicly.
+
+## Building & Contributing
+
+See [docs/Build.md](docs/Build.md), [docs/user/README.md](docs/user/README.md), and [docs/Coding.md](docs/Coding.md).
+
+- Desktop executables produced by CMake: `hoochii` (GUI), `hoochii-cli` (SDL CLI), `hoochii-room` (dedicated multiplayer room), and `hoochii-updater` (Windows update helper).
+- Internal CMake target names (`lichii`, `lichii-cmd`, `lichii-updater`) and `LICHII_*` build options remain stable for compatibility with existing build scripts.
+
+## Brand Identity & Theme
+
+Hoochii ships with the **Hoochii Obsidian** visual theme—deep obsidian charcoal (`#0E1016`) paired with electric coral-amber (`#FF6B4A` → `#FFB347`) accents—along with bespoke platform icons and banners in [dist/branding](dist/branding) and [dist/qt_themes/hoochii](dist/qt_themes/hoochii).
+
+## Credits and License
+
+Hoochii stands on the shoulders of the Lichii, Eglantine, Eden, Sudachi, and yuzu open-source communities and their contributors, including Eglantine's original developer Camille LaVey. All upstream attributions and third-party license terms continue to apply.
+
+Licensed under the **GNU General Public License v3.0 or later** (`GPL-3.0-or-later`). See [LICENSE.txt](LICENSE.txt) and individual source headers for details.

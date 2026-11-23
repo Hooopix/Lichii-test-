@@ -7,12 +7,14 @@
 
 using namespace Common::FS;
 
-TEST_CASE("Lichii keeps its data apart from Eden's", "[fs]") {
+TEST_CASE("Hoochii keeps its data apart from Lichii's and Eden's", "[fs]") {
     const auto& data = GetEdenPath(EdenPath::EdenDir);
     if (data.filename() == "user") {
         SKIP("portable user directory in use");
     }
-    CHECK(data.filename() == "lichii");
+    CHECK(data.filename() == "hoochii");
+    CHECK(GetLegacyPath(LegacyLichiiDir).filename() == "lichii");
+    CHECK(GetLegacyPath(LegacyLichiiDir).parent_path() == data.parent_path());
     CHECK(GetLegacyPath(LegacyEdenDir).filename() == "eden");
     CHECK(GetLegacyPath(LegacyEdenDir).parent_path() == data.parent_path());
 }

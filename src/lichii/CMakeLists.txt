@@ -273,7 +273,7 @@ add_executable(lichii
     game/carousel.h game/carousel.cpp
 )
 
-set_target_properties(lichii PROPERTIES OUTPUT_NAME "lichii")
+set_target_properties(lichii PROPERTIES OUTPUT_NAME "hoochii")
 target_compile_definitions(lichii PRIVATE
     LICHII_USE_PENDING_RELEASE_NOTES=$<BOOL:${LICHII_USE_PENDING_RELEASE_NOTES}>)
 
@@ -410,12 +410,12 @@ target_sources(lichii
 if (APPLE)
     target_sources(lichii PRIVATE util/macos_sleep.cpp util/macos_sleep.h)
 
-    # Use the supplied Lichii artwork for all macOS generators.
+    # Use the supplied Hoochii artwork for all macOS generators.
     set(_dist "${CMAKE_SOURCE_DIR}/dist")
-    set(_icons "${_dist}/lichii.icns")
+    set(_icons "${_dist}/hoochii.icns")
     if (CMAKE_GENERATOR MATCHES "Xcode")
         set_target_properties(lichii PROPERTIES
-            MACOSX_BUNDLE_ICON_FILE lichii.icns
+            MACOSX_BUNDLE_ICON_FILE hoochii.icns
             # Also force xcode to manage signing for us.
             XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED ON
             XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED ON)

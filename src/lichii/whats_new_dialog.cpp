@@ -26,7 +26,7 @@
 
 namespace {
 
-constexpr auto app_icon = ":/icons/default/256x256/lichii.png";
+constexpr auto app_icon = ":/icons/default/256x256/hoochii.png";
 
 QLabel* Label(const QString& text, int size, bool bold = false) {
     auto* const label = new QLabel(text);
@@ -182,7 +182,7 @@ WhatsNewDialog::WhatsNewDialog(quint32 build, QDate build_date, bool include_pen
                                QWidget* parent)
     : QDialog(parent), releases(LoadReleases(build, build_date, include_pending)) {
     setObjectName(QStringLiteral("WhatsNewDialog"));
-    setWindowTitle(tr("What's new in Lichii"));
+    setWindowTitle(tr("What's new in Hoochii"));
     const QIcon icon(QString::fromLatin1(app_icon));
     setWindowIcon(icon);
     resize(600, 740);
@@ -225,8 +225,8 @@ WhatsNewDialog::WhatsNewDialog(quint32 build, QDate build_date, bool include_pen
     labels->addWidget(title);
     intro->addLayout(labels, 1);
     auto* const wordmark = new QLabel;
-    wordmark->setPixmap(QIcon(QStringLiteral(":/img/lichii_wordmark.png"))
-                            .pixmap(QSize(84, 36), devicePixelRatioF()));
+    wordmark->setPixmap(QIcon(QStringLiteral(":/img/hoochii_wordmark.png"))
+                            .pixmap(QSize(166, 28), devicePixelRatioF()));
     intro->addWidget(wordmark, 0, Qt::AlignTop);
     header->addLayout(intro);
 
@@ -277,7 +277,7 @@ WhatsNewDialog::WhatsNewDialog(quint32 build, QDate build_date, bool include_pen
                                                                      : Qt::LeftToRight);
     connect(archive, &QToolButton::clicked, this, [] {
         QDesktopServices::openUrl(
-            QUrl(QStringLiteral("https://github.com/zortos293/Lichii/releases")));
+            QUrl(QStringLiteral("https://github.com/Hooopix/Hoochii/releases")));
     });
     history->addWidget(archive, 0, 1, Qt::AlignHCenter);
 
@@ -301,7 +301,7 @@ void WhatsNewDialog::ShowRelease(qsizetype index) {
     }
     current_index = index;
     const auto& release = releases[index];
-    const auto build = release.build ? tr("Lichii build %1").arg(release.build) : tr("Lichii");
+    const auto build = release.build ? tr("Hoochii build %1").arg(release.build) : tr("Hoochii");
     metadata->setText(
         release.preview ? tr("Coming in the next release (preview)")
         : release.date.isValid()

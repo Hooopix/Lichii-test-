@@ -1621,7 +1621,7 @@ void MainWindow::InitializeHotkeys() {
 
     LinkActionShortcut(ui->action_Load_File, QStringLiteral("Load File"));
     LinkActionShortcut(ui->action_Load_Amiibo, QStringLiteral("Load/Remove Amiibo"));
-    LinkActionShortcut(ui->action_Exit, QStringLiteral("Exit Eglantine"));
+    LinkActionShortcut(ui->action_Exit, QStringLiteral("Exit Hoochii"));
     LinkActionShortcut(ui->action_Restart, QStringLiteral("Restart Emulation"));
     LinkActionShortcut(ui->action_Pause, QStringLiteral("Continue/Pause Emulation"));
     LinkActionShortcut(ui->action_Stop, QStringLiteral("Stop Emulation"));
@@ -6698,8 +6698,8 @@ bool MainWindow::ConfirmClose() {
         UISettings::values.confirm_before_stopping.GetValue() == ConfirmStop::Ask_Based_On_Game)
         return true;
 
-    const auto text = tr("Are you sure you want to close Lichii?");
-    return question(this, tr("Lichii"), text);
+    const auto text = tr("Are you sure you want to close Hoochii?");
+    return question(this, tr("Hoochii"), text);
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
@@ -6805,7 +6805,7 @@ bool MainWindow::ConfirmChangeGame() {
 
     // Use custom question to link controller navigation
     return question(
-        this, tr("Lichii"),
+        this, tr("Hoochii"),
         tr("Are you sure you want to stop the emulation? Any unsaved progress will be lost."),
         QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
 }
@@ -6814,10 +6814,10 @@ bool MainWindow::ConfirmForceLockedExit() {
     if (QtCommon::emu_thread == nullptr)
         return true;
 
-    const auto text = tr("The currently running application has requested Lichii to not exit.\n\n"
+    const auto text = tr("The currently running application has requested Hoochii to not exit.\n\n"
                          "Would you like to bypass this and exit anyway?");
 
-    return question(this, tr("Lichii"), text);
+    return question(this, tr("Hoochii"), text);
 }
 
 void MainWindow::RequestGameExit() {
@@ -6836,7 +6836,9 @@ void MainWindow::filterBarSetChecked(bool state) {
 static void AdjustLinkColor() {
     QPalette new_pal(qApp->palette());
 
-    if (UISettings::values.theme == "lichii")
+    if (UISettings::values.theme == "hoochii")
+        new_pal.setColor(QPalette::Link, QColor(0xff, 0x85, 0x66));
+    else if (UISettings::values.theme == "lichii")
         new_pal.setColor(QPalette::Link, QColor(0xf4, 0x5a, 0x85));
     else if (UISettings::IsDarkTheme())
         new_pal.setColor(QPalette::Link, QColor(0, 190, 255, 255));
@@ -6845,6 +6847,40 @@ static void AdjustLinkColor() {
 
     if (qApp->palette().color(QPalette::Link) != new_pal.color(QPalette::Link))
         qApp->setPalette(new_pal);
+}
+
+// Hoochii Obsidian palette: deep obsidian charcoal with electric coral-amber highlights.
+static QPalette HoochiiPalette() {
+    QPalette palette;
+    const QColor window(0x0e, 0x10, 0x16);
+    const QColor surface(0x16, 0x19, 0x23);
+    const QColor text(0xf0, 0xf2, 0xf7);
+    const QColor disabled(0x55, 0x59, 0x66);
+    const QColor accent(0xff, 0x6b, 0x4a);
+    palette.setColor(QPalette::Window, window);
+    palette.setColor(QPalette::WindowText, text);
+    palette.setColor(QPalette::Base, window);
+    palette.setColor(QPalette::AlternateBase, QColor(0x12, 0x15, 0x1e));
+    palette.setColor(QPalette::ToolTipBase, QColor(0x1a, 0x1e, 0x2b));
+    palette.setColor(QPalette::ToolTipText, text);
+    palette.setColor(QPalette::PlaceholderText, QColor(0x70, 0x76, 0x88));
+    palette.setColor(QPalette::Text, text);
+    palette.setColor(QPalette::Button, surface);
+    palette.setColor(QPalette::ButtonText, text);
+    palette.setColor(QPalette::BrightText, Qt::white);
+    palette.setColor(QPalette::Light, QColor(0x2a, 0x2f, 0x40));
+    palette.setColor(QPalette::Midlight, QColor(0x22, 0x26, 0x35));
+    palette.setColor(QPalette::Mid, QColor(0x1a, 0x1e, 0x2b));
+    palette.setColor(QPalette::Dark, QColor(0x0a, 0x0c, 0x11));
+    palette.setColor(QPalette::Shadow, Qt::black);
+    palette.setColor(QPalette::Highlight, accent);
+    palette.setColor(QPalette::HighlightedText, Qt::white);
+    palette.setColor(QPalette::Link, QColor(0xff, 0x85, 0x66));
+    palette.setColor(QPalette::LinkVisited, QColor(0xff, 0xb3, 0x47));
+    palette.setColor(QPalette::Disabled, QPalette::WindowText, disabled);
+    palette.setColor(QPalette::Disabled, QPalette::Text, disabled);
+    palette.setColor(QPalette::Disabled, QPalette::ButtonText, disabled);
+    return palette;
 }
 
 // Lichii Dark styles most widgets through its stylesheet; the palette covers what Qt draws
@@ -6954,13 +6990,16 @@ void MainWindow::UpdateUITheme() {
     if (current_theme.isEmpty())
         current_theme = default_theme;
 
-    static bool lichii_palette = false;
-    if (current_theme == QStringLiteral("lichii")) {
+    static bool custom_palette = false;
+    if (current_theme == QStringLiteral("hoochii")) {
+        qApp->setPalette(HoochiiPalette());
+        custom_palette = true;
+    } else if (current_theme == QStringLiteral("lichii")) {
         qApp->setPalette(LichiiPalette());
-        lichii_palette = true;
-    } else if (lichii_palette) {
+        custom_palette = true;
+    } else if (custom_palette) {
         qApp->setPalette(QPalette());
-        lichii_palette = false;
+        custom_palette = false;
     }
 
 #ifdef _WIN32

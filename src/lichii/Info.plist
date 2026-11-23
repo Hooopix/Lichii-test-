@@ -1,11 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
 <!--
 SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 SPDX-License-Identifier: GPL-3.0-or-later
 SPDX-FileCopyrightText: 2015 Pierre de La Morinerie <kemenaran@gmail.com>
 SPDX-License-Identifier: GPL-2.0-or-later
 -->
-
-<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -17,17 +16,17 @@ SPDX-License-Identifier: GPL-2.0-or-later
     <key>CFBundleGetInfoString</key>
     <string></string>
     <key>CFBundleIconFile</key>
-    <string>lichii.icns</string>
+    <string>hoochii.icns</string>
     <key>CFBundleIconName</key>
-    <string>lichii</string>
+    <string>hoochii</string>
     <key>CFBundleIdentifier</key>
-    <string>io.github.zortos293.lichii</string> <!-- May be required by 3rd party ext -->
+    <string>io.github.hooopix.hoochii</string> <!-- May be required by 3rd party ext -->
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleLongVersionString</key>
     <string></string>
     <key>CFBundleName</key>
-    <string>lichii</string>
+    <string>Hoochii</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -47,7 +46,11 @@ SPDX-License-Identifier: GPL-2.0-or-later
                 <string>nro</string>
                 <string>nso</string>
                 <string>nsp</string>
+                <string>nsz</string>
+                <string>nup</string>
+                <string>nx</string>
                 <string>xci</string>
+                <string>xcz</string>
             </array>
             <key>CFBundleTypeName</key>
             <string>Nintendo Switch File</string>
@@ -63,8 +66,6 @@ SPDX-License-Identifier: GPL-2.0-or-later
     <string>public.app-category.games</string>
     <key>LSRequiresCarbon</key>
     <true/>
-    <key>LSApplicationCategoryType</key>
-    <string>public.app-category.games</string>
 
     <!-- NS -->
     <key>NSPrincipalClass</key>
@@ -76,7 +77,7 @@ SPDX-License-Identifier: GPL-2.0-or-later
         <string>LaunchGameIntent</string>
     </array>
     <key>NSHumanReadableCopyright</key>
-    <string>Copyright 2025 Eden Emulator Project GPL-3.0-or-later</string>
+    <string>Copyright 2026 Hoochii Emulator Project GPL-3.0-or-later</string>
 
     <!-- UI -->
     <key>UIDesignRequiresCompatibility</key>

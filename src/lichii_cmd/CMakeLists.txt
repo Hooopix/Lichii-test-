@@ -44,7 +44,7 @@ if (ENABLE_OPENGL)
 endif()
 target_link_libraries(lichii-cmd PRIVATE ${PLATFORM_LIBRARIES} Threads::Threads)
 
-create_resource("../../dist/eden.bmp" "lichii_cmd/lichii_icon.h" "lichii_icon")
+create_resource("../../dist/hoochii.bmp" "lichii_cmd/lichii_icon.h" "lichii_icon")
 target_include_directories(lichii-cmd PRIVATE ${RESOURCES_DIR})
 
 target_link_libraries(lichii-cmd PRIVATE SDL3::SDL3)
