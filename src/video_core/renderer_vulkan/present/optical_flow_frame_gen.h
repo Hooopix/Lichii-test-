@@ -85,13 +85,9 @@ private:
     std::optional<DescriptorPool> m_interp_pool;
     DescriptorAllocator m_interp_allocator;
 
-    // History and motion vector images
-    vk::Image m_history_image;
-    vk::ImageView m_history_view;
-
-    // Store the last current-frame view for descriptor caching
-    vk::Image m_current_image;
-    vk::ImageView m_current_view;
+    // Ping-pong color frame copies (indexed by parity) for optical flow & interpolation
+    std::array<vk::Image, 2> m_frame_images;
+    std::array<vk::ImageView, 2> m_frame_views;
 
     bool m_initialized{};
     bool m_has_history{};

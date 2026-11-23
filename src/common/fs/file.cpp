@@ -322,6 +322,48 @@ size_t IOFile::WriteString(std::span<const char> string) const {
     return WriteSpan(string);
 }
 
+#ifndef _WIN32
+size_t IOFile::ReadAt(u64 offset, std::span<u8> data) const {
+    if (!IsOpen() || data.empty()) {
+        return 0;
+    }
+    const int fd = fileno(file);
+    size_t total = 0;
+    while (total < data.size()) {
+        const ssize_t n = pread(fd, data.data() + total, data.size() - total,
+                                static_cast<off_t>(offset + total));
+        if (n > 0) {
+            total += static_cast<size_t>(n);
+        } else if (n == 0) {
+            break;
+        } else if (errno != EINTR) {
+            break;
+        }
+    }
+    return total;
+}
+
+size_t IOFile::WriteAt(u64 offset, std::span<const u8> data) const {
+    if (!IsOpen() || data.empty()) {
+        return 0;
+    }
+    const int fd = fileno(file);
+    size_t total = 0;
+    while (total < data.size()) {
+        const ssize_t n = pwrite(fd, data.data() + total, data.size() - total,
+                                 static_cast<off_t>(offset + total));
+        if (n > 0) {
+            total += static_cast<size_t>(n);
+        } else if (n == 0) {
+            break;
+        } else if (errno != EINTR) {
+            break;
+        }
+    }
+    return total;
+}
+#endif
+
 bool IOFile::Flush() const {
     if (!IsOpen()) {
         return false;

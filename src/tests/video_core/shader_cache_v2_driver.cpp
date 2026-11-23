@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -603,4 +604,55 @@ TEST_CASE("Shader cache v2 driver blobs: a session stores nothing past the ceili
     REQUIRE_FALSE(store.Full());
     REQUIRE(store.Counts().loaded > 0);
     REQUIRE_FALSE(store.Find(RecordKind::GraphicsBinary, 5).has_value());
+}
+
+TEST_CASE("DriverBlobStore handles concurrent Find calls and clean Close drain",
+          "[video_core][shader_cache_v2]") {
+    TempDir temp;
+    const auto file = temp.path / V2::DriverFileName;
+    constexpr u64 BlobCount = 24;
+    StoreBlobs(file, BlobCount);
+
+    V2::DriverBlobStore store{file, TestIdentity(), {.writer = FastWriter}};
+    REQUIRE(store.Active());
+    REQUIRE(store.Counts().loaded == BlobCount);
+
+    std::atomic<bool> ok{true};
+    std::vector<std::thread> workers;
+    for (u64 t = 0; t < 4; ++t) {
+        workers.emplace_back([&, t] {
+            for (int iter = 0; iter < 32; ++iter) {
+                for (u64 i = t; i < BlobCount; i += 4) {
+                    const auto found = store.Find(TestKind(i), 0x100 + i);
+                    if (!found || *found != TestPayload(i)) {
+                        ok = false;
+                        return;
+                    }
+                }
+            }
+        });
+    }
+    for (auto& w : workers) {
+        w.join();
+    }
+    REQUIRE(ok.load());
+
+    // Close racing with active Find calls must drain cleanly without crashes or corruption.
+    std::atomic<bool> stop{false};
+    std::thread reader{[&] {
+        for (u64 i = 0; !stop.load(std::memory_order_relaxed); ++i) {
+            const u64 idx = i % BlobCount;
+            if (const auto found = store.Find(TestKind(idx), 0x100 + idx)) {
+                if (*found != TestPayload(idx)) {
+                    ok = false;
+                }
+            }
+        }
+    }};
+    std::this_thread::sleep_for(5ms);
+    store.Close();
+    stop.store(true, std::memory_order_relaxed);
+    reader.join();
+    REQUIRE(ok.load());
+    REQUIRE_FALSE(store.Find(TestKind(0), 0x100).has_value());
 }

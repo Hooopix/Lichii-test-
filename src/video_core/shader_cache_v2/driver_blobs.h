@@ -5,6 +5,7 @@
 
 #include <array>
 #include <atomic>
+#include <condition_variable>
 #include <filesystem>
 #include <mutex>
 #include <optional>
@@ -176,6 +177,11 @@ private:
     const DriverBlobOptions options;
 
     mutable std::mutex mutex;
+    std::condition_variable reads_done_cv;
+    size_t active_reads{};
+#ifdef _WIN32
+    std::mutex reader_mutex;
+#endif
     std::unordered_map<EntryKey, Entry, EntryKeyHash> index;
     Common::FS::IOFile reader;
     u64 file_bytes{}; ///< The file's size with the blobs queued for it

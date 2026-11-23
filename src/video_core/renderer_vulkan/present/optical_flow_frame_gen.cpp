@@ -43,57 +43,6 @@ void DiscardForComputeWrite(vk::CommandBuffer cmdbuf, VkImage image) {
                            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, {}, {}, barrier);
 }
 
-// ── Batched dual-copy ──────────────────────────────────────────────────
-// Copy one source image into TWO destinations with only 3 barrier calls
-// instead of 6 (avoiding redundant source transitions).
-void CopyImageToTwo(vk::CommandBuffer cmdbuf, VkImage source,
-                    VkImage dest_a, VkImage dest_b, VkExtent2D extent) {
-    const VkImageCopy region{
-        .srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
-        .srcOffset = {0, 0, 0},
-        .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
-        .dstOffset = {0, 0, 0},
-        .extent = {extent.width, extent.height, 1},
-    };
-
-    // 1. Transition source → TRANSFER_SRC, both dests → TRANSFER_DST (batched)
-    const std::array before{
-        MakeBarrier(source, VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-                                VK_ACCESS_TRANSFER_WRITE_BIT,
-                    VK_ACCESS_TRANSFER_READ_BIT, VK_IMAGE_LAYOUT_GENERAL,
-                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL),
-        MakeBarrier(dest_a, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
-                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL),
-        MakeBarrier(dest_b, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
-                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL),
-    };
-    cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-                               VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-                               VK_PIPELINE_STAGE_TRANSFER_BIT,
-                           VK_PIPELINE_STAGE_TRANSFER_BIT, 0, {}, {}, before);
-
-    // 2. Copy source → dest_a, then source → dest_b (source stays TRANSFER_SRC)
-    cmdbuf.CopyImage(source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dest_a,
-                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, region);
-    cmdbuf.CopyImage(source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dest_b,
-                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, region);
-
-    // 3. Transition all three back to GENERAL (batched)
-    const std::array after{
-        MakeBarrier(source, VK_ACCESS_TRANSFER_READ_BIT,
-                    VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL),
-        MakeBarrier(dest_a, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
-                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL),
-        MakeBarrier(dest_b, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
-                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL),
-    };
-    cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
-                           VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-                               VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                           0, {}, {}, after);
-}
-
 void CopyImageToImage(vk::CommandBuffer cmdbuf, VkImage source, VkImage destination,
                       VkExtent2D extent) {
     const VkImageCopy region{
@@ -109,8 +58,8 @@ void CopyImageToImage(vk::CommandBuffer cmdbuf, VkImage source, VkImage destinat
                                 VK_ACCESS_TRANSFER_WRITE_BIT,
                     VK_ACCESS_TRANSFER_READ_BIT, VK_IMAGE_LAYOUT_GENERAL,
                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL),
-        MakeBarrier(destination, VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
-                    VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL),
+        MakeBarrier(destination, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
+                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL),
     };
     cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
                                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
@@ -256,29 +205,26 @@ OpticalFlowFrameGen::~OpticalFlowFrameGen() = default;
 void OpticalFlowFrameGen::CreateResources(const Device& device) {
     m_linear_sampler = CreateBilinearSampler(device);
 
-    m_history_image = CreateWrappedImage(m_allocator, m_extent, m_format);
-    m_history_view = CreateWrappedImageView(device, m_history_image, m_format);
-
-    // Current-frame copy for interpolation shader
-    m_current_image = m_allocator.CreateImage(VkImageCreateInfo{
-        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
-        .pNext = nullptr,
-        .flags = 0,
-        .imageType = VK_IMAGE_TYPE_2D,
-        .format = m_format,
-        .extent = {m_extent.width, m_extent.height, 1},
-        .mipLevels = 1,
-        .arrayLayers = 1,
-        .samples = VK_SAMPLE_COUNT_1_BIT,
-        .tiling = VK_IMAGE_TILING_OPTIMAL,
-        .usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-                 VK_IMAGE_USAGE_SAMPLED_BIT,
-        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-        .queueFamilyIndexCount = 0,
-        .pQueueFamilyIndices = nullptr,
-        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-    });
-    m_current_view = CreateWrappedImageView(device, m_current_image, m_format);
+    for (size_t parity = 0; parity < 2; ++parity) {
+        m_frame_images[parity] = m_allocator.CreateImage(VkImageCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .imageType = VK_IMAGE_TYPE_2D,
+            .format = m_format,
+            .extent = {m_extent.width, m_extent.height, 1},
+            .mipLevels = 1,
+            .arrayLayers = 1,
+            .samples = VK_SAMPLE_COUNT_1_BIT,
+            .tiling = VK_IMAGE_TILING_OPTIMAL,
+            .usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+            .queueFamilyIndexCount = 0,
+            .pQueueFamilyIndices = nullptr,
+            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        });
+        m_frame_views[parity] = CreateWrappedImageView(device, m_frame_images[parity], m_format);
+    }
 
     VkExtent2D level_extent = m_extent;
     for (FlowLevel& level : m_levels) {
@@ -371,7 +317,7 @@ void OpticalFlowFrameGen::WriteFlowDescriptors(const Device& device) {
         for (size_t level = 0; level < FLOW_LEVELS; ++level) {
             const FlowLevel& here = m_levels[level];
             const VkDescriptorSet downsample = m_downsample_desc_sets[parity * FLOW_LEVELS + level];
-            sampled(level == 0 ? *m_current_view : *m_levels[level - 1].luma_view[parity],
+            sampled(level == 0 ? *m_frame_views[parity] : *m_levels[level - 1].luma_view[parity],
                     downsample, 0);
             storage(*here.luma_view[parity], downsample, 1);
 
@@ -435,9 +381,9 @@ void OpticalFlowFrameGen::Process(const Device& device, Scheduler& scheduler, Vk
     const u32 parity = m_parity;
     m_parity ^= 1;
     if (!m_has_history) {
-        // First frame: populate history, the current-frame copy and this frame's luma pyramid.
+        // First frame: populate this parity slot and its luma pyramid.
         scheduler.Record([this, current_frame, parity](vk::CommandBuffer cmdbuf) {
-            CopyImageToTwo(cmdbuf, current_frame, *m_history_image, *m_current_image, m_extent);
+            CopyImageToImage(cmdbuf, current_frame, *m_frame_images[parity], m_extent);
             std::vector<VkImageMemoryBarrier> barriers;
             for (const FlowLevel& level : m_levels) {
                 barriers.push_back(MakeBarrier(*level.luma[0], 0, VK_ACCESS_SHADER_WRITE_BIT,
@@ -463,8 +409,7 @@ void OpticalFlowFrameGen::Process(const Device& device, Scheduler& scheduler, Vk
     m_last_frame_count = frame_count;
 
     scheduler.Record([this, current_frame, parity](vk::CommandBuffer cmdbuf) {
-        CopyImageToImage(cmdbuf, *m_current_image, *m_history_image, m_extent);
-        CopyImageToImage(cmdbuf, current_frame, *m_current_image, m_extent);
+        CopyImageToImage(cmdbuf, current_frame, *m_frame_images[parity], m_extent);
         RecordFlow(cmdbuf, parity, true);
     });
 
@@ -484,12 +429,16 @@ void OpticalFlowFrameGen::Generate(const Device& device, Scheduler& scheduler, V
         m_interp_allocator = m_interp_pool->Allocator(device, scheduler, *m_interp_desc_layout,
                                                       DescriptorBankInfo{.textures = 3, .images = 1});
     }
+    const u32 current_parity = m_parity ^ 1;
+    const u32 history_parity = m_parity;
     const VkDescriptorSet set = m_interp_allocator.Commit();
     std::vector<VkDescriptorImageInfo> image_infos;
     image_infos.reserve(4);
     std::vector<VkWriteDescriptorSet> updates{
-        CreateWriteDescriptorSet(image_infos, *m_linear_sampler, *m_current_view, set, 0),
-        CreateWriteDescriptorSet(image_infos, *m_linear_sampler, *m_history_view, set, 1),
+        CreateWriteDescriptorSet(image_infos, *m_linear_sampler, *m_frame_views[current_parity],
+                                 set, 0),
+        CreateWriteDescriptorSet(image_infos, *m_linear_sampler, *m_frame_views[history_parity],
+                                 set, 1),
         CreateWriteDescriptorSet(image_infos, *m_linear_sampler, *m_levels[0].motion_view, set, 2),
     };
 

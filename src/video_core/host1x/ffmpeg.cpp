@@ -53,25 +53,46 @@ constexpr std::array PreferredGpuDecoders = {
 };
 
 AVPixelFormat GetGpuFormat(AVCodecContext* codec_context, const AVPixelFormat* pix_fmts) {
-    const auto desc = av_pix_fmt_desc_get(codec_context->pix_fmt);
-    if (desc && !(desc->flags & AV_PIX_FMT_FLAG_HWACCEL)) {
+    const auto is_offered = [pix_fmts](AVPixelFormat fmt) {
+        for (const AVPixelFormat* p = pix_fmts; *p != AV_PIX_FMT_NONE; ++p) {
+            if (*p == fmt) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    const auto find_for_device = [&](AVHWDeviceType type) -> AVPixelFormat {
         for (int i = 0;; i++) {
             const AVCodecHWConfig* config = avcodec_get_hw_config(codec_context->codec, i);
             if (!config) {
-                break;
+                return AV_PIX_FMT_NONE;
             }
+            if ((config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX) &&
+                config->device_type == type && is_offered(config->pix_fmt)) {
+                return config->pix_fmt;
+            }
+        }
+    };
 
-            for (const auto type : PreferredGpuDecoders) {
-                if (config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX && config->device_type == type) {
-                    codec_context->pix_fmt = config->pix_fmt;
-                }
-            }
+    const auto desc = av_pix_fmt_desc_get(codec_context->pix_fmt);
+    if (desc && (desc->flags & AV_PIX_FMT_FLAG_HWACCEL) && is_offered(codec_context->pix_fmt)) {
+        return codec_context->pix_fmt;
+    }
+
+    if (codec_context->hw_device_ctx) {
+        const auto* hw_ctx =
+            reinterpret_cast<const AVHWDeviceContext*>(codec_context->hw_device_ctx->data);
+        if (const AVPixelFormat fmt = find_for_device(hw_ctx->type); fmt != AV_PIX_FMT_NONE) {
+            codec_context->pix_fmt = fmt;
+            return fmt;
         }
     }
 
-    for (const AVPixelFormat* p = pix_fmts; *p != AV_PIX_FMT_NONE; ++p) {
-        if (*p == codec_context->pix_fmt) {
-            return codec_context->pix_fmt;
+    for (const auto type : PreferredGpuDecoders) {
+        if (const AVPixelFormat fmt = find_for_device(type); fmt != AV_PIX_FMT_NONE) {
+            codec_context->pix_fmt = fmt;
+            return fmt;
         }
     }
 
@@ -357,6 +378,9 @@ std::shared_ptr<Frame> DecoderContext::ReceiveFrame() {
         if (const int ret = av_hwframe_transfer_data(m_final_frame->GetFrame(), intermediate_frame->GetFrame(), 0); ret < 0) {
             LOG_ERROR(HW_GPU, "av_hwframe_transfer_data error: {}", AVError(ret));
             return {};
+        }
+        if (const int ret = av_frame_copy_props(m_final_frame->GetFrame(), intermediate_frame->GetFrame()); ret < 0) {
+            LOG_WARNING(HW_GPU, "av_frame_copy_props error: {}", AVError(ret));
         }
     } else {
         m_final_frame = std::move(intermediate_frame);

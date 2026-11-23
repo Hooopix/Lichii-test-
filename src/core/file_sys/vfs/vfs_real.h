@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <condition_variable>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -23,6 +24,11 @@ struct FileReference : public Common::IntrusiveListBaseNode<FileReference> {
     std::string path;
     std::optional<u64> size;
     std::shared_ptr<Common::FS::IOFile> file{};
+    u32 active_io{};
+#ifdef _WIN32
+    std::mutex io_mutex;
+    bool closing{};
+#endif
     bool detached{};
 };
 
@@ -61,12 +67,17 @@ private:
     ReferenceListType open_references;
     ReferenceListType closed_references;
     std::mutex list_lock;
+    std::condition_variable io_cv;
     size_t num_open_files{};
     // TODO: Workaround for improper dtor() ordering on clang + FreeBSD
     bool in_dtor = false;
 
 private:
     friend class RealVfsFile;
+    std::shared_ptr<Common::FS::IOFile> AcquireReferenceFile(FileReference& reference,
+                                                             OpenMode perms,
+                                                             bool invalidate_size = false);
+    void FinishReferenceIo(FileReference& reference);
     void RefreshReferenceLocked(FileReference& reference, OpenMode perms);
     void DropReference(FileReference& reference);
 
@@ -77,11 +88,25 @@ private:
 
 private:
     VirtualFile OpenFileLocked(const std::string& path, std::optional<u64> size, OpenMode perms);
-    bool RenameFileLocked(const std::string& old_path, const std::string& new_path);
-    bool RenameDirectoryLocked(const std::string& old_path, const std::string& new_path);
+#ifdef _WIN32
+    bool RenameFileLocked(std::unique_lock<std::mutex>& lk, const std::string& old_path,
+                          const std::string& new_path, std::shared_ptr<VfsFile>& closing_owner);
+    bool RenameDirectoryLocked(std::unique_lock<std::mutex>& lk, const std::string& old_path,
+                               const std::string& new_path,
+                               std::vector<std::shared_ptr<VfsFile>>& closing_owners);
+#else
+    bool RenameFileLocked(std::unique_lock<std::mutex>& lk, const std::string& old_path,
+                          const std::string& new_path);
+    bool RenameDirectoryLocked(std::unique_lock<std::mutex>& lk, const std::string& old_path,
+                               const std::string& new_path);
+#endif
     Result DeleteFileWithResult(std::string_view path);
     void DetachReferenceLocked(FileCache::iterator entry);
     void CloseReferenceLocked(FileReference& reference);
+#ifdef _WIN32
+    void BeginCloseReferenceLocked(std::unique_lock<std::mutex>& lk, FileReference& reference);
+    void EndCloseReferenceLocked(FileReference& reference);
+#endif
     void EvictSingleReferenceLocked();
     void InsertReferenceIntoListLocked(FileReference& reference);
     void RemoveReferenceFromListLocked(FileReference& reference);

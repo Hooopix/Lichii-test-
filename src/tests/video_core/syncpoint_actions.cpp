@@ -254,3 +254,58 @@ TEST_CASE("Cancelling a running syncpoint action returns once it is done",
     releaser.join();
     incrementer.join();
 }
+
+TEST_CASE("SyncpointManager::WaitGuestFor wakes immediately on increment and times out cleanly",
+          "[video_core][syncpoint_actions]") {
+    SyncpointManager manager;
+    REQUIRE_FALSE(manager.WaitGuestFor(2, 1, std::chrono::milliseconds{5}));
+
+    std::thread incrementer{[&] {
+        std::this_thread::sleep_for(std::chrono::milliseconds{10});
+        manager.IncrementGuest(2);
+    }};
+    REQUIRE(manager.WaitGuestFor(2, 1, std::chrono::milliseconds{500}));
+    REQUIRE(manager.WaitGuestFor(2, 1, std::chrono::milliseconds{0}));
+    incrementer.join();
+}
+
+TEST_CASE("Guest mirror notify runs after unlock and drains before clear",
+          "[video_core][syncpoint_actions]") {
+    SyncpointManager manager;
+    std::atomic<bool> entered{false};
+    std::atomic<bool> release{false};
+    std::atomic<bool> finished{false};
+    std::atomic<bool> saw_published{false};
+    manager.SetGuestMirror(
+        [](u32, u32) {},
+        [&](u32 id, u32 value) {
+            if (id != 4) {
+                return;
+            }
+            saw_published = manager.IsReadyGuest(id, value);
+            entered = true;
+            while (!release) {
+                std::this_thread::yield();
+            }
+            finished = true;
+        });
+
+    std::thread incrementer{[&] { manager.IncrementGuest(4); }};
+    while (!entered) {
+        std::this_thread::yield();
+    }
+    REQUIRE(saw_published.load());
+
+    // Another syncpoint can increment while notify is running because guard is released.
+    manager.IncrementGuest(5);
+    REQUIRE(manager.GetGuestSyncpointValue(5) == 1);
+
+    std::thread releaser{[&] {
+        std::this_thread::sleep_for(std::chrono::milliseconds{15});
+        release = true;
+    }};
+    manager.SetGuestMirror({}, {});
+    REQUIRE(finished.load());
+    releaser.join();
+    incrementer.join();
+}

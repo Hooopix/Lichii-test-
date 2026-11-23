@@ -314,6 +314,15 @@ public:
         return std::fwrite(data.data(), sizeof(T), data.size(), file);
     }
 
+#ifndef _WIN32
+    /// Reads up to data.size() bytes starting at byte offset without moving the file cursor.
+    /// Safe for concurrent calls on the same open handle when not mixed with buffered stdio I/O.
+    [[nodiscard]] size_t ReadAt(u64 offset, std::span<u8> data) const;
+
+    /// Writes up to data.size() bytes starting at byte offset without moving the file cursor.
+    [[nodiscard]] size_t WriteAt(u64 offset, std::span<const u8> data) const;
+#endif
+
     /**
      * Reads a T object from a file sequentially.
      * This function reads from the current position of the file pointer and
