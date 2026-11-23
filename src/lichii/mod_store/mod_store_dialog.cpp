@@ -22,12 +22,14 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
+#include <QPainter>
 #include <QPointer>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QSet>
 #include <QSignalBlocker>
 #include <QSplitter>
 #include <QTemporaryFile>
@@ -38,8 +40,10 @@
 #include <QtConcurrentRun>
 
 #include "common/scm_rev.h"
+#include "lichii/glass/glass_tokens.h"
 #include "lichii/mod_store/mod_store_client.h"
 #include "lichii/mod_store/mod_store_install.h"
+#include "qt_common/config/uisettings.h"
 
 namespace ModStore {
 namespace {
@@ -48,21 +52,13 @@ constexpr int PageSize = 50;
 constexpr qint64 MaxArchiveBytes = 64 * 1024 * 1024;
 constexpr int IdRole = Qt::UserRole;
 constexpr int TitleRole = Qt::UserRole + 1;
-const QString PrimaryButtonStyle = QStringLiteral(
-    "QPushButton { background: #d52c5b; border: 1px solid #d52c5b; border-radius: 7px;"
-    " color: white; font-weight: 600; padding: 0 12px; min-height: 30px; }"
-    "QPushButton:hover { background: #bc1f4b; border-color: #bc1f4b; }"
-    "QPushButton:pressed { background: #a61942; border-color: #a61942; }"
-    "QPushButton:focus { border-color: palette(window-text); }");
-const QString DarkPrimaryButtonStyle = QStringLiteral(
-    "QPushButton { background: #f0386b; border-color: #f0386b; color: white; font-weight: 600;"
-    " border-width: 1px; border-style: solid; border-radius: 7px; padding: 0 12px;"
-    " min-height: 30px; }"
-    "QPushButton:hover { background: #f45a85; border-color: #f45a85; }"
-    "QPushButton:pressed { background: #d42c5a; border-color: #d42c5a; }"
-    "QPushButton:focus { border-color: white; }");
+constexpr int HeaderRole = Qt::UserRole + 2;
 
 enum class Compatibility { Match, Unknown, Mismatch };
+
+QString NormalizeTitleId(const QString& id) {
+    return id.trimmed().toUpper();
+}
 
 std::optional<qulonglong> BuildOrdinal(const QString& tag) {
     static const QRegularExpression format(QStringLiteral("^build-[1-9][0-9]*$"));
@@ -82,7 +78,7 @@ bool KnownBuild(const QString& build) {
 
 Compatibility MatchVersion(const QString& selected_title, const GameIdentity& game,
                            const Version& version) {
-    if (selected_title != version.title_id ||
+    if (selected_title.compare(version.title_id, Qt::CaseInsensitive) != 0 ||
         (!game.display_version.isEmpty() && game.display_version != version.game_version) ||
         (KnownBuild(game.build_id) &&
          game.build_id.compare(version.build_id, Qt::CaseInsensitive) != 0)) {
@@ -122,64 +118,137 @@ QLabel* PlainLabel(QWidget* parent, bool wrap = false) {
     return label;
 }
 
-class Dialog final : public QDialog {
-    Q_DECLARE_TR_FUNCTIONS(ModStore::Dialog)
+QIcon MakeDetectedGameIcon(const QPixmap& source, const QColor& live_color) {
+    constexpr int px = 48;
+    QImage canvas(px, px, QImage::Format_ARGB32_Premultiplied);
+    canvas.fill(Qt::transparent);
+    QPainter p(&canvas);
+    p.setRenderHint(QPainter::Antialiasing);
+    p.setRenderHint(QPainter::SmoothPixmapTransform);
+    if (!source.isNull()) {
+        const QPixmap rounded = GlassUi::RoundedPixmap(source, 22, 5.0);
+        p.drawPixmap(QRect(2, 2, 44, 44), rounded);
+    } else {
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(0x28, 0x28, 0x34));
+        p.drawRoundedRect(QRectF(2, 2, 44, 44), 10.0, 10.0);
+    }
+    // Small green detected indicator dot in bottom-right corner.
+    p.setPen(QPen(QColor(0x10, 0x10, 0x16), 2.5));
+    p.setBrush(live_color);
+    p.drawEllipse(QRectF(33, 33, 13, 13));
+    p.end();
+
+    QPixmap pm = QPixmap::fromImage(canvas);
+    pm.setDevicePixelRatio(2.0);
+    return QIcon(pm);
+}
+
+QString BuildPrimaryButtonStyle(const GlassUi::PaletteTokens& tokens, bool use_glass) {
+    const QColor accent = use_glass ? tokens.accent
+                                    : (tokens.dark ? QColor(QStringLiteral("#f0386b"))
+                                                   : QColor(QStringLiteral("#d52c5b")));
+    const QColor hover = use_glass ? tokens.accent_hover
+                                   : (tokens.dark ? QColor(QStringLiteral("#f45a85"))
+                                                  : QColor(QStringLiteral("#bc1f4b")));
+    const QColor pressed = use_glass ? tokens.accent_pressed
+                                     : (tokens.dark ? QColor(QStringLiteral("#d42c5a"))
+                                                    : QColor(QStringLiteral("#a61942")));
+    const QColor fg = use_glass ? tokens.on_accent : QColor(Qt::white);
+    return QStringLiteral(
+               "QPushButton { background: %1; border: 1px solid %1; border-radius: 8px;"
+               " color: %2; font-weight: 600; padding: 0 12px; min-height: 30px; }"
+               "QPushButton:hover { background: %3; border-color: %3; }"
+               "QPushButton:pressed { background: %4; border-color: %4; }"
+               "QPushButton:focus { border-color: %5; }")
+        .arg(accent.name(), fg.name(), hover.name(), pressed.name(),
+             tokens.dark ? QStringLiteral("white") : QStringLiteral("palette(window-text)"));
+}
+
+} // namespace
+
+struct Widget::Impl {
+    Q_DECLARE_TR_FUNCTIONS(ModStore::Widget)
 
 public:
-    Dialog(QWidget* parent, DialogContext ctx)
-        : QDialog(parent), context(std::move(ctx)), client(context.base_url, this) {
-        setWindowTitle(tr("Mod Store"));
-        resize(1050, 760);
-        setMinimumSize(730, 520);
+    Impl(Widget* owner_, DialogContext ctx, bool embedded_)
+        : owner(owner_), context(std::move(ctx)), client(context.base_url, owner_),
+          embedded(embedded_) {
+        row_height = qMax(30, owner->fontMetrics().height() + 12);
 
-        const auto border = dark ? QStringLiteral("#2a2b30") : QStringLiteral("#cbd0d6");
-        const auto tree_style = QStringLiteral("QTreeWidget { border: 1px solid %1; }").arg(border);
-        auto* root = new QVBoxLayout(this);
+        auto* root = new QVBoxLayout(owner);
+        root->setContentsMargins(embedded ? 0 : 12, embedded ? 0 : 12, embedded ? 0 : 12,
+                                 embedded ? 0 : 12);
         root->setSpacing(8);
+
+        // Auto-detection summary bar + My Games / All Games switcher.
+        auto* detect_row = new QHBoxLayout;
+        detect_row->setSpacing(8);
+        detect_banner = PlainLabel(owner, false);
+        detect_banner->setObjectName(QStringLiteral("modStoreDetectBanner"));
+        my_games_btn = new QPushButton(tr("My Games"), owner);
+        my_games_btn->setCheckable(true);
+        my_games_btn->setCursor(Qt::PointingHandCursor);
+        all_catalog_btn = new QPushButton(tr("All Games"), owner);
+        all_catalog_btn->setCheckable(true);
+        all_catalog_btn->setCursor(Qt::PointingHandCursor);
+        detect_row->addWidget(detect_banner, 1);
+        detect_row->addWidget(my_games_btn);
+        detect_row->addWidget(all_catalog_btn);
+        root->addLayout(detect_row);
+
         auto* games_row = new QHBoxLayout;
         auto* toolbar = new QHBoxLayout;
-        game_picker = new QComboBox(this);
+        game_picker = new QComboBox(owner);
         game_picker->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
         game_picker->setMinimumContentsLength(22);
-        refresh = new QPushButton(tr("Refresh"), this);
-        all_games = new QPushButton(tr("All games"), this);
-        installed_mode = new QPushButton(tr("Installed"), this);
+        refresh = new QPushButton(tr("Refresh"), owner);
+        all_games = new QPushButton(tr("Show all"), owner);
+        installed_mode = new QPushButton(tr("Store Installed"), owner);
         installed_mode->setCheckable(true);
-        games_row->addWidget(new QLabel(tr("Game:"), this));
-        games_row->addWidget(game_picker);
-        games_row->addWidget(all_games);
-        games_row->addStretch();
-        games_row->addWidget(refresh);
-        games_row->addWidget(installed_mode);
+        if (embedded) {
+            detect_row->addWidget(refresh);
+            detect_row->addWidget(installed_mode);
+            game_picker->hide();
+            all_games->hide();
+        } else {
+            games_row->addWidget(new QLabel(tr("Game:"), owner));
+            games_row->addWidget(game_picker, 1);
+            games_row->addWidget(all_games);
+            games_row->addWidget(refresh);
+            games_row->addWidget(installed_mode);
+        }
 
-        search = new QLineEdit(this);
-        search->setPlaceholderText(tr("Enter a name, author, or description"));
+        search = new QLineEdit(owner);
+        search->setPlaceholderText(tr("Search mods by name, author, or description..."));
         search->setClearButtonEnabled(true);
         search->setMaxLength(128);
-        type = new QComboBox(this);
+        type = new QComboBox(owner);
         type->addItem(tr("All types"));
         for (const auto category : {ModType::Graphics, ModType::Fps, ModType::Cheats,
                                     ModType::Translation, ModType::Gameplay}) {
             type->addItem(TypeName(category), static_cast<int>(category));
         }
-        sort = new QComboBox(this);
+        sort = new QComboBox(owner);
         sort->addItem(tr("Recently updated"), static_cast<int>(Sort::Updated));
         sort->addItem(tr("Name A–Z"), static_cast<int>(Sort::Name));
-        toolbar->addWidget(new QLabel(tr("Filter:"), this));
+        toolbar->addWidget(new QLabel(tr("Filter:"), owner));
         toolbar->addWidget(search, 1);
-        toolbar->addWidget(new QLabel(tr("Type:"), this));
+        toolbar->addWidget(new QLabel(tr("Type:"), owner));
         toolbar->addWidget(type);
-        toolbar->addWidget(new QLabel(tr("Sort by:"), this));
+        toolbar->addWidget(new QLabel(tr("Sort by:"), owner));
         toolbar->addWidget(sort);
-        root->addLayout(games_row);
+        if (!embedded) {
+            root->addLayout(games_row);
+        }
         root->addLayout(toolbar);
 
-        auto* split = new QSplitter(this);
+        auto* split = new QSplitter(owner);
         game_tree = new QTreeWidget(split);
         game_tree->setHeaderLabels({tr("Games"), tr("Mods")});
         game_tree->setRootIsDecorated(false);
         game_tree->setUniformRowHeights(true);
-        game_tree->setStyleSheet(tree_style);
+        game_tree->setIconSize(QSize(24, 24));
         game_tree->header()->setMinimumHeight(row_height);
         game_tree->header()->setStretchLastSection(false);
         game_tree->header()->setSectionResizeMode(0, QHeaderView::Stretch);
@@ -193,7 +262,6 @@ public:
         results->setRootIsDecorated(false);
         results->setUniformRowHeights(true);
         results->setAlternatingRowColors(true);
-        results->setStyleSheet(tree_style);
         results->header()->setMinimumHeight(row_height);
         results->header()->setStretchLastSection(false);
         results->header()->setSectionResizeMode(0, QHeaderView::Stretch);
@@ -203,10 +271,8 @@ public:
         middle_layout->addWidget(results, 1);
         middle_layout->addWidget(more);
 
-        auto* inspector_frame = new QFrame(split);
+        inspector_frame = new QFrame(split);
         inspector_frame->setObjectName(QStringLiteral("modStoreInspector"));
-        inspector_frame->setStyleSheet(
-            QStringLiteral("QFrame#modStoreInspector { border: 1px solid %1; }").arg(border));
         auto* inspector_layout = new QVBoxLayout(inspector_frame);
         inspector_layout->setContentsMargins(1, 1, 1, 1);
         inspector_layout->setSpacing(0);
@@ -217,7 +283,7 @@ public:
         inspector_layout->addWidget(inspector, 1);
         auto* pane = new QWidget(inspector);
         auto* detail = new QVBoxLayout(pane);
-        detail->setContentsMargins(8, 8, 8, 8);
+        detail->setContentsMargins(10, 10, 10, 10);
         detail->setSpacing(6);
         name = PlainLabel(pane, true);
         QFont heading = name->font();
@@ -255,11 +321,6 @@ public:
 
         compatibility_card = new QFrame(pane);
         compatibility_card->setObjectName(QStringLiteral("modStoreCompatibility"));
-        compatibility_card->setStyleSheet(
-            QStringLiteral("QFrame#modStoreCompatibility { background: %1; border: 1px solid %2;"
-                           " border-radius: 6px; }")
-                .arg(dark ? QStringLiteral("#1b1c20") : QStringLiteral("#f7f7f8"),
-                     dark ? QStringLiteral("#34363c") : QStringLiteral("#cbd0d6")));
         auto* compatibility_layout = new QGridLayout(compatibility_card);
         compatibility_layout->setContentsMargins(9, 8, 9, 8);
         compatibility_layout->setHorizontalSpacing(12);
@@ -274,25 +335,22 @@ public:
         compatibility_state->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         compatibility_layout->addWidget(caption, 0, 0);
         compatibility_layout->addWidget(compatibility_state, 0, 1);
-        const auto divider = [&](int row) {
+        const auto add_divider = [&](int row) {
             auto* rule = new QFrame(compatibility_card);
             rule->setFixedHeight(1);
-            rule->setStyleSheet(dark ? QStringLiteral("background: #34363c;")
-                                     : QStringLiteral("background: #cbd0d6;"));
+            compatibility_dividers.push_back(rule);
             compatibility_layout->addWidget(rule, row, 0, 1, 2);
         };
-        divider(1);
+        add_divider(1);
         for (size_t i = 0; i < compatibility_rows.size(); ++i) {
             auto& [key, value] = compatibility_rows[i];
             key = PlainLabel(compatibility_card, true);
-            key->setStyleSheet(dark ? QStringLiteral("color: #9b9da4;")
-                                    : QStringLiteral("color: #555c67;"));
             value = PlainLabel(compatibility_card, true);
             const auto row = static_cast<int>(i) + (i < 5 ? 2 : 3);
             compatibility_layout->addWidget(key, row, 0, Qt::AlignTop);
             compatibility_layout->addWidget(value, row, 1, Qt::AlignTop);
         }
-        divider(7);
+        add_divider(7);
         catalog_note = PlainLabel(compatibility_card, true);
         catalog_note->setText(tr("Not verified by the catalog"));
         compatibility_layout->addWidget(catalog_note, 11, 0, 1, 2);
@@ -303,7 +361,7 @@ public:
 
         auto* actions = new QWidget(inspector_frame);
         auto* actions_layout = new QVBoxLayout(actions);
-        actions_layout->setContentsMargins(8, 4, 8, 8);
+        actions_layout->setContentsMargins(10, 4, 10, 10);
         actions_layout->setSpacing(6);
         inspector_layout->addWidget(actions);
         hint = PlainLabel(actions, true);
@@ -322,18 +380,21 @@ public:
         installed_actions->addStretch();
         actions_layout->addLayout(installed_actions);
         actions_layout->addWidget(hint);
+
         split->setChildrenCollapsible(false);
-        split->setSizes({208, 330, 500});
+        split->setSizes({276, 314, 460});
         split->setStretchFactor(2, 1);
         root->addWidget(split, 1);
 
         auto* footer = new QHBoxLayout;
-        status = PlainLabel(this, true);
-        close_button = new QPushButton(tr("Close"), this);
+        status = PlainLabel(owner, true);
+        close_button = new QPushButton(tr("Close"), owner);
+        close_button->setVisible(!embedded);
         footer->addWidget(status, 1);
         footer->addWidget(close_button);
         root->addLayout(footer);
-        progress = new QDialog(this);
+
+        progress = new QDialog(owner);
         progress->setWindowTitle(tr("Installing mod"));
         progress->setWindowModality(Qt::WindowModal);
         progress->setMinimumWidth(360);
@@ -347,15 +408,17 @@ public:
         progress_layout->addWidget(progress_catalog_note);
         progress_layout->addWidget(progress_bar);
         progress_layout->addWidget(cancel_button, 0, Qt::AlignRight);
-        for (auto* button : findChildren<QPushButton*>()) {
+
+        for (auto* button : owner->findChildren<QPushButton*>()) {
             button->setAutoDefault(false);
         }
-        connect(cancel_button, &QPushButton::clicked, this, [this] { CancelDownload(); });
-        connect(progress, &QDialog::rejected, this, [this] { CancelDownload(); });
+
+        connect(cancel_button, &QPushButton::clicked, owner, [this] { CancelDownload(); });
+        connect(progress, &QDialog::rejected, owner, [this] { CancelDownload(); });
         debounce.setSingleShot(true);
         debounce.setInterval(240);
-        connect(&debounce, &QTimer::timeout, this, [this] { ReloadMods(); });
-        connect(search, &QLineEdit::textChanged, this, [this] {
+        connect(&debounce, &QTimer::timeout, owner, [this] { ReloadMods(); });
+        connect(search, &QLineEdit::textChanged, owner, [this] {
             more->hide();
             debounce.start();
         });
@@ -363,80 +426,80 @@ public:
             debounce.stop();
             ReloadMods();
         };
-        connect(type, &QComboBox::currentIndexChanged, this, filters_changed);
-        connect(sort, &QComboBox::currentIndexChanged, this, filters_changed);
-        connect(refresh, &QPushButton::clicked, this, [this] {
-            identities.clear();
-            if (!installed_mode->isChecked()) {
-                LoadGames();
-            }
-            ReloadMods();
+        connect(type, &QComboBox::currentIndexChanged, owner, filters_changed);
+        connect(sort, &QComboBox::currentIndexChanged, owner, filters_changed);
+        connect(refresh, &QPushButton::clicked, owner, [this] { RefreshAll(); });
+        connect(my_games_btn, &QPushButton::clicked, owner, [this] { SetMyGamesOnly(true); });
+        connect(all_catalog_btn, &QPushButton::clicked, owner, [this] { SetMyGamesOnly(false); });
+        connect(all_games, &QPushButton::clicked, owner, [this] {
+            user_selected_game = true;
+            SetMyGamesOnly(false);
+            SelectGame({}, true);
         });
-        connect(all_games, &QPushButton::clicked, this, [this] { SelectGame({}); });
-        connect(installed_mode, &QPushButton::toggled, this, [this](bool installed) {
+        connect(installed_mode, &QPushButton::toggled, owner, [this](bool installed) {
             type->setEnabled(!installed);
             sort->setEnabled(!installed);
             ReloadMods();
         });
-        connect(game_picker, &QComboBox::currentIndexChanged, this,
-                [this] { SelectGame(game_picker->currentData().toString()); });
-        connect(game_tree, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem* item) {
-            if (item) {
-                SelectGame(item->data(0, IdRole).toString());
-            }
+        connect(game_picker, &QComboBox::currentIndexChanged, owner, [this] {
+            user_selected_game = true;
+            SelectGame(game_picker->currentData().toString(), true);
         });
-        connect(results, &QTreeWidget::currentItemChanged, this,
+        connect(game_tree, &QTreeWidget::currentItemChanged, owner,
+                [this](QTreeWidgetItem* item) {
+                    if (item && !item->data(0, HeaderRole).toBool()) {
+                        user_selected_game = true;
+                        SelectGame(item->data(0, IdRole).toString(), true);
+                    }
+                });
+        connect(results, &QTreeWidget::currentItemChanged, owner,
                 [this](QTreeWidgetItem* item) { SelectMod(item); });
-        connect(more, &QPushButton::clicked, this, [this] {
+        connect(more, &QPushButton::clicked, owner, [this] {
             if (next && !debounce.isActive() && !reload_after_install) {
                 FetchMods(*next, list_epoch);
             }
         });
-        connect(release, &QComboBox::currentIndexChanged, this, [this] { UpdateOffer(); });
-        connect(target_picker, &QComboBox::currentIndexChanged, this, [this] {
+        connect(release, &QComboBox::currentIndexChanged, owner, [this] { UpdateOffer(); });
+        connect(target_picker, &QComboBox::currentIndexChanged, owner, [this] {
             local_title = target_picker->currentData().toString();
             ReadLocal();
             BuildOffers();
         });
-        connect(preview_select, &QComboBox::currentIndexChanged, this, [this] { LoadPreview(); });
-        connect(description_toggle, &QToolButton::toggled, this, [this](bool expanded) {
+        connect(preview_select, &QComboBox::currentIndexChanged, owner, [this] { LoadPreview(); });
+        connect(description_toggle, &QToolButton::toggled, owner, [this](bool expanded) {
             if (selected) {
                 description_toggle->setText(expanded ? tr("Show less")
                                                      : tr("Show full description"));
                 description->setText(expanded ? selected->description : description_excerpt);
             }
         });
-        connect(source, &QPushButton::clicked, this, [this] { OpenSource(); });
-        connect(install, &QPushButton::clicked, this, [this] { StartInstall(); });
-        connect(enable, &QPushButton::clicked, this, [this] { ToggleEnabled(); });
-        connect(uninstall, &QPushButton::clicked, this, [this] { RemoveInstalled(); });
-        connect(close_button, &QPushButton::clicked, this, &Dialog::reject);
+        connect(source, &QPushButton::clicked, owner, [this] { OpenSource(); });
+        connect(install, &QPushButton::clicked, owner, [this] { StartInstall(); });
+        connect(enable, &QPushButton::clicked, owner, [this] { ToggleEnabled(); });
+        connect(uninstall, &QPushButton::clicked, owner, [this] { RemoveInstalled(); });
+        connect(close_button, &QPushButton::clicked, owner, [this] { emit owner->CloseRequested(); });
 
-        title = context.initial_title_id;
+        title = NormalizeTitleId(context.initial_title_id);
+        if (!title.isEmpty()) {
+            user_selected_game = true;
+        }
+        RebuildDetectedIndex(std::move(context.detected_games));
+        my_games_only = !detected_games.isEmpty();
+        if (title.isEmpty() && !detected_games.isEmpty()) {
+            title = detected_games.first().title_id;
+        }
+
+        RefreshTheme();
         PopulateGames();
         ClearDetail();
-        QTimer::singleShot(0, this, [this] {
-            LoadGames();
-            ReloadMods();
-        });
-    }
-
-    bool Changed() const {
-        return changed;
-    }
-
-    void reject() override {
-        if (applying) {
-            return;
+        if (context.auto_load) {
+            QTimer::singleShot(0, owner, [this] {
+                LoadGames();
+                ReloadMods();
+            });
         }
-        if (busy) {
-            CancelDownload();
-            return;
-        }
-        QDialog::reject();
     }
 
-private:
     static QString TypeName(ModType value) {
         switch (value) {
         case ModType::Graphics:
@@ -465,19 +528,172 @@ private:
         return {};
     }
 
+    void RebuildDetectedIndex(QList<DetectedGame> incoming) {
+        detected_games.clear();
+        detected_by_id.clear();
+        for (auto& g : incoming) {
+            g.title_id = NormalizeTitleId(g.title_id);
+            if (g.title_id.isEmpty() || detected_by_id.contains(g.title_id)) {
+                continue;
+            }
+            detected_by_id.insert(g.title_id, g);
+            detected_games.push_back(std::move(g));
+        }
+    }
+
+    void RefreshTheme() {
+        tokens = GlassUi::ActiveTokens();
+        use_glass = UISettings::IsGlassShellEnabled();
+        dark = use_glass ? tokens.dark : owner->palette().color(QPalette::Window).lightness() < 128;
+
+        const QString border = use_glass ? GlassUi::RgbaCss(tokens.rule)
+                                         : (dark ? QStringLiteral("#2a2b30")
+                                                 : QStringLiteral("#cbd0d6"));
+        const QString card_bg = use_glass ? GlassUi::RgbaCss(tokens.plate_bg)
+                                          : (dark ? QStringLiteral("#1b1c20")
+                                                  : QStringLiteral("#f7f7f8"));
+        const QString muted_css = use_glass ? GlassUi::RgbaCss(tokens.ink_muted)
+                                            : (dark ? QStringLiteral("#9b9da4")
+                                                    : QStringLiteral("#555c67"));
+
+        const QString tree_style =
+            QStringLiteral("QTreeWidget { border: 1px solid %1; border-radius: %2px; }")
+                .arg(border)
+                .arg(use_glass ? 12 : 4);
+        game_tree->setStyleSheet(tree_style);
+        results->setStyleSheet(tree_style);
+        inspector_frame->setStyleSheet(
+            QStringLiteral("QFrame#modStoreInspector { border: 1px solid %1; border-radius: %2px; }")
+                .arg(border)
+                .arg(use_glass ? 12 : 4));
+        compatibility_card->setStyleSheet(
+            QStringLiteral("QFrame#modStoreCompatibility { background: %1; border: 1px solid %2;"
+                           " border-radius: 8px; }")
+                .arg(card_bg, border));
+        for (auto* rule : compatibility_dividers) {
+            rule->setStyleSheet(QStringLiteral("background: %1;").arg(border));
+        }
+        for (auto& [key, value] : compatibility_rows) {
+            key->setStyleSheet(QStringLiteral("color: %1;").arg(muted_css));
+        }
+
+        UpdateFilterToggleStyles();
+        if (selected) {
+            UpdateOffer();
+        } else {
+            UpdateButtons();
+        }
+        PopulateGames();
+    }
+
+    void UpdateFilterToggleStyles() {
+        const QString active_style = BuildPrimaryButtonStyle(tokens, use_glass);
+        my_games_btn->setChecked(my_games_only);
+        all_catalog_btn->setChecked(!my_games_only);
+        my_games_btn->setEnabled(!detected_games.isEmpty());
+        my_games_btn->setStyleSheet(my_games_only && !detected_games.isEmpty() ? active_style
+                                                                               : QString{});
+        all_catalog_btn->setStyleSheet(!my_games_only || detected_games.isEmpty() ? active_style
+                                                                                  : QString{});
+        my_games_btn->setText(detected_games.isEmpty()
+                                  ? tr("My Games")
+                                  : tr("My Games (%1)").arg(detected_games.size()));
+
+        const int matched = MatchedCatalogGameCount();
+        if (detected_games.isEmpty()) {
+            detect_banner->setText(
+                tr("Add a game folder to auto-detect compatible mods for your library."));
+            detect_banner->setStyleSheet(
+                QStringLiteral("color: %1;").arg(GlassUi::RgbaCss(tokens.ink_muted)));
+        } else if (matched > 0) {
+            detect_banner->setText(
+                tr("● Auto-detected %1 library game(s) — %2 matched in Mod Store")
+                    .arg(detected_games.size())
+                    .arg(matched));
+            detect_banner->setStyleSheet(
+                QStringLiteral("color: %1; font-weight: 600;").arg(tokens.live.name()));
+        } else {
+            detect_banner->setText(
+                tr("● Auto-detected %1 library game(s)").arg(detected_games.size()));
+            detect_banner->setStyleSheet(
+                QStringLiteral("color: %1; font-weight: 600;").arg(tokens.live.name()));
+        }
+    }
+
+    int MatchedCatalogGameCount() const {
+        int matched = 0;
+        for (const auto& game : games) {
+            if (detected_by_id.contains(NormalizeTitleId(game.title_id)) && game.mod_count > 0) {
+                ++matched;
+            }
+        }
+        return matched;
+    }
+
+    void SetDetectedGames(QList<DetectedGame> incoming) {
+        const bool had_detected = !detected_games.isEmpty();
+        RebuildDetectedIndex(std::move(incoming));
+        if (!had_detected && !detected_games.isEmpty() && !user_selected_game) {
+            my_games_only = true;
+            AutoSelectBestDetectedGame();
+        } else if (detected_games.isEmpty()) {
+            my_games_only = false;
+        }
+        PopulateGames();
+        UpdateFilterToggleStyles();
+    }
+
+    void SetMyGamesOnly(bool value) {
+        const bool next_mode = value && !detected_games.isEmpty();
+        if (my_games_only == next_mode) {
+            UpdateFilterToggleStyles();
+            return;
+        }
+        my_games_only = next_mode;
+        if (my_games_only && !detected_by_id.contains(title) && !detected_games.isEmpty()) {
+            AutoSelectBestDetectedGame();
+        }
+        PopulateGames();
+        UpdateFilterToggleStyles();
+        if (context.auto_load) {
+            ReloadMods();
+        }
+    }
+
+    void AutoSelectBestDetectedGame() {
+        QHash<QString, int> catalog_counts;
+        for (const auto& g : games) {
+            catalog_counts.insert(NormalizeTitleId(g.title_id), g.mod_count);
+        }
+        QString best;
+        int best_count = -1;
+        for (const auto& det : detected_games) {
+            const int count = catalog_counts.value(det.title_id, 0);
+            if (best.isEmpty() || count > best_count) {
+                best = det.title_id;
+                best_count = count;
+            }
+        }
+        if (!best.isEmpty() && best != title) {
+            title = best;
+            emit owner->SelectedGameChanged(title);
+        }
+    }
+
     void Status(const QString& text) {
         status->setText(text);
     }
 
     GameIdentity Identity(const QString& title_id) {
-        const auto found = identities.constFind(title_id);
+        const QString normalized = NormalizeTitleId(title_id);
+        const auto found = identities.constFind(normalized);
         if (found != identities.cend()) {
             return found.value();
         }
-        const auto identity = !title_id.isEmpty() && context.game_identity
-                                  ? context.game_identity(title_id)
+        const auto identity = !normalized.isEmpty() && context.game_identity
+                                  ? context.game_identity(normalized)
                                   : GameIdentity{};
-        identities.insert(title_id, identity);
+        identities.insert(normalized, identity);
         return identity;
     }
 
@@ -486,25 +702,125 @@ private:
         const QSignalBlocker block_tree(game_tree);
         game_picker->clear();
         game_tree->clear();
-        const auto append = [&](const QString& id, const QString& game, const QString& count) {
-            game_picker->addItem(game, id);
-            auto* node = new QTreeWidgetItem(game_tree, {game, count});
+
+        QHash<QString, Game> catalog_by_id;
+        for (const auto& g : games) {
+            catalog_by_id.insert(NormalizeTitleId(g.title_id), g);
+        }
+
+        const auto add_section_header = [&](const QString& label, const QString& badge) {
+            auto* header = new QTreeWidgetItem(game_tree, {label, badge});
+            header->setFlags(Qt::ItemIsEnabled);
+            header->setData(0, HeaderRole, true);
+            QFont f = header->font(0);
+            f.setBold(true);
+            f.setPointSizeF(std::max<qreal>(8.0, f.pointSizeF() - 1.0));
+            header->setFont(0, f);
+            header->setFont(1, f);
+            header->setForeground(0, tokens.ink_faint);
+            header->setForeground(1, tokens.ink_faint);
+            header->setTextAlignment(1, Qt::AlignRight | Qt::AlignVCenter);
+            header->setSizeHint(0, QSize(0, qMax(24, row_height - 4)));
+        };
+
+        const auto append_row = [&](const QString& id, const QString& label, const QString& count,
+                                    const QIcon& icon, const QString& tooltip) {
+            game_picker->addItem(icon, label, id);
+            auto* node = new QTreeWidgetItem(game_tree, {label, count});
             node->setSizeHint(0, QSize(0, row_height));
             node->setData(0, IdRole, id);
-            node->setToolTip(0, game);
+            node->setData(0, HeaderRole, false);
+            node->setToolTip(0, tooltip.isEmpty() ? label : tooltip);
             node->setTextAlignment(1, Qt::AlignRight | Qt::AlignVCenter);
+            if (!icon.isNull()) {
+                node->setIcon(0, icon);
+            }
             if (id == title) {
                 game_tree->setCurrentItem(node);
                 game_picker->setCurrentIndex(game_picker->count() - 1);
             }
         };
-        append({}, tr("All games"), {});
-        for (const auto& game : games) {
-            append(game.title_id, game.name, QString::number(game.mod_count));
+
+        if (!my_games_only) {
+            append_row({}, tr("All games"), {}, {}, tr("Browse mods for all games"));
         }
+
+        // 1. Pinned My Games (Auto-Detected) section.
+        if (!detected_games.isEmpty()) {
+            QList<DetectedGame> sorted = detected_games;
+            std::ranges::sort(sorted, [&](const DetectedGame& a, const DetectedGame& b) {
+                const int ca = catalog_by_id.contains(a.title_id) ? catalog_by_id[a.title_id].mod_count
+                                                                  : 0;
+                const int cb = catalog_by_id.contains(b.title_id) ? catalog_by_id[b.title_id].mod_count
+                                                                  : 0;
+                if ((ca > 0) != (cb > 0)) {
+                    return ca > cb;
+                }
+                if (ca != cb) {
+                    return ca > cb;
+                }
+                return a.name.compare(b.name, Qt::CaseInsensitive) < 0;
+            });
+
+            add_section_header(tr("MY GAMES (AUTO-DETECTED)"), QString::number(sorted.size()));
+            for (const auto& det : sorted) {
+                const auto cat_it = catalog_by_id.constFind(det.title_id);
+                const int count = cat_it != catalog_by_id.cend() ? cat_it->mod_count : 0;
+                const QString display_name =
+                    !det.name.isEmpty()
+                        ? det.name
+                        : (cat_it != catalog_by_id.cend() ? cat_it->name : det.title_id);
+                const QString count_text = count > 0 ? QString::number(count)
+                                                     : (det.installed_mods > 0
+                                                            ? tr("%1 local").arg(det.installed_mods)
+                                                            : QStringLiteral("0"));
+                const QString tooltip =
+                    tr("%1\nTitle ID: %2\nDetected in your library · %3 catalog mod(s)")
+                        .arg(display_name, det.title_id)
+                        .arg(count);
+                append_row(det.title_id, display_name, count_text,
+                           MakeDetectedGameIcon(det.icon, tokens.live), tooltip);
+            }
+        }
+
+        // 2. Remaining Catalog Games (shown in All Games mode or when no library games exist).
+        if (!my_games_only || detected_games.isEmpty()) {
+            QList<Game> other_games;
+            for (const auto& game : games) {
+                if (!detected_by_id.contains(NormalizeTitleId(game.title_id))) {
+                    other_games.push_back(game);
+                }
+            }
+            if (!other_games.isEmpty()) {
+                if (!detected_games.isEmpty()) {
+                    add_section_header(tr("ALL CATALOG GAMES"),
+                                       QString::number(other_games.size()));
+                }
+                for (const auto& game : other_games) {
+                    const QString nid = NormalizeTitleId(game.title_id);
+                    append_row(nid, game.name, QString::number(game.mod_count), {},
+                               QStringLiteral("%1 (%2)").arg(game.name, nid));
+                }
+            }
+        }
+
         if (!title.isEmpty() && game_picker->findData(title) < 0) {
-            append(title, title, {});
+            append_row(title, title, {}, {}, title);
         }
+
+        UpdateFilterToggleStyles();
+    }
+
+    void SetCatalogGames(QList<Game> catalog_games) {
+        games = std::move(catalog_games);
+        if (!user_selected_game && !detected_games.isEmpty()) {
+            const QString previous = title;
+            AutoSelectBestDetectedGame();
+            if (title != previous && context.auto_load) {
+                ReloadMods();
+            }
+        }
+        PopulateGames();
     }
 
     void LoadGames(int offset = 0) {
@@ -527,18 +843,34 @@ private:
                     LoadGames(*page->next_offset);
                     return;
                 }
-                games = std::move(incoming_games);
-                PopulateGames();
+                SetCatalogGames(std::move(incoming_games));
             }
         });
     }
 
-    void SelectGame(const QString& id) {
+    void SelectGame(const QString& raw_id, bool emit_signal) {
+        const QString id = NormalizeTitleId(raw_id);
         if (title == id) {
             return;
         }
         title = id;
+        if (!title.isEmpty() && my_games_only && !detected_by_id.contains(title)) {
+            my_games_only = false;
+        }
         PopulateGames();
+        if (context.auto_load) {
+            ReloadMods();
+        }
+        if (emit_signal) {
+            emit owner->SelectedGameChanged(title);
+        }
+    }
+
+    void RefreshAll() {
+        identities.clear();
+        if (!installed_mode->isChecked()) {
+            LoadGames();
+        }
         ReloadMods();
     }
 
@@ -613,12 +945,19 @@ private:
                     !installed.name.contains(search->text().trimmed(), Qt::CaseInsensitive)) {
                     continue;
                 }
-                const auto game = std::ranges::find(games, id, &Game::title_id);
-                auto* item = new QTreeWidgetItem(
-                    results, {installed.name, game != games.cend() ? game->name : id});
+                const QString nid = NormalizeTitleId(id);
+                const auto det = detected_by_id.constFind(nid);
+                const auto game = std::ranges::find_if(games, [&](const Game& g) {
+                    return NormalizeTitleId(g.title_id) == nid;
+                });
+                const QString game_name = det != detected_by_id.cend() && !det->name.isEmpty()
+                                              ? det->name
+                                          : game != games.cend() ? game->name
+                                                                 : nid;
+                auto* item = new QTreeWidgetItem(results, {installed.name, game_name});
                 item->setSizeHint(0, QSize(0, row_height));
                 item->setData(0, IdRole, installed.id);
-                item->setData(0, TitleRole, id);
+                item->setData(0, TitleRole, nid);
                 item->setToolTip(0, installed.version);
             }
         }
@@ -667,7 +1006,7 @@ private:
             return;
         }
         const auto id = item->data(0, IdRole).toString();
-        local_title = item->data(0, TitleRole).toString();
+        local_title = NormalizeTitleId(item->data(0, TitleRole).toString());
         local_id = id;
         if (installed_mode->isChecked()) {
             ReadLocal();
@@ -702,18 +1041,27 @@ private:
                 if (local_title.isEmpty()) {
                     const auto found =
                         std::ranges::find_if(selected->title_ids, [this](const QString& id) {
-                            return Identity(id).installed;
+                            const QString nid = NormalizeTitleId(id);
+                            return detected_by_id.contains(nid) || Identity(nid).installed;
                         });
-                    local_title =
-                        found == selected->title_ids.cend() ? selected->title_ids.value(0) : *found;
+                    local_title = NormalizeTitleId(
+                        found == selected->title_ids.cend() ? selected->title_ids.value(0) : *found);
                 }
             }
             {
                 const QSignalBlocker block(target_picker);
                 target_picker->clear();
-                for (const auto& id : selected->title_ids) {
-                    const auto game = std::ranges::find(games, id, &Game::title_id);
-                    target_picker->addItem(game == games.cend() ? id : game->name, id);
+                for (const auto& raw_id : selected->title_ids) {
+                    const QString nid = NormalizeTitleId(raw_id);
+                    const auto det = detected_by_id.constFind(nid);
+                    const auto game = std::ranges::find_if(games, [&](const Game& g) {
+                        return NormalizeTitleId(g.title_id) == nid;
+                    });
+                    const QString label = det != detected_by_id.cend() && !det->name.isEmpty()
+                                              ? tr("%1 (Detected)").arg(det->name)
+                                          : game != games.cend() ? game->name
+                                                                 : nid;
+                    target_picker->addItem(label, nid);
                 }
                 target_picker->setCurrentIndex(target_picker->findData(local_title));
                 target_picker->setVisible(title.isEmpty() && !installed_mode->isChecked() &&
@@ -805,8 +1153,9 @@ private:
                          file.size_bytes <= MaxArchiveBytes});
                 const auto entry =
                     tr("%1 · %2 · %3")
-                        .arg(file.name, locale().formattedDataSize(file.size_bytes),
-                             locale().toString(file.uploaded_at.date(), QLocale::ShortFormat));
+                        .arg(file.name, owner->locale().formattedDataSize(file.size_bytes),
+                             owner->locale().toString(file.uploaded_at.date(),
+                                                      QLocale::ShortFormat));
                 release->addItem(entry);
                 release->setItemData(release->count() - 1, entry, Qt::ToolTipRole);
                 if ((first_match < 0 || (!first_match_has_checksum && !file.sha256.isEmpty())) &&
@@ -837,10 +1186,18 @@ private:
         return index >= 0 && index < offer_list.size() ? &offer_list[index] : nullptr;
     }
 
+    bool TargetMatchesSelected() const {
+        if (!selected) {
+            return false;
+        }
+        return std::ranges::any_of(selected->title_ids, [this](const QString& id) {
+            return id.compare(local_title, Qt::CaseInsensitive) == 0;
+        });
+    }
+
     bool CanInstall(const Offer& offer) {
-        if (!selected || selected->demo || !selected->title_ids.contains(local_title) ||
-            !offer.supported || !Identity(local_title).installed ||
-            offer.compatibility == Compatibility::Mismatch) {
+        if (!selected || selected->demo || !TargetMatchesSelected() || !offer.supported ||
+            !Identity(local_title).installed || offer.compatibility == Compatibility::Mismatch) {
             return false;
         }
         if (const auto* file = std::get_if<ExternalFile>(&offer.file)) {
@@ -870,8 +1227,15 @@ private:
             left->setVisible(!key.isEmpty());
             right->setVisible(!key.isEmpty());
         };
-        const auto game = std::ranges::find(games, local_title, &Game::title_id);
-        set_row(0, tr("Catalog game"), game == games.cend() ? unknown : game->name);
+        const auto det = detected_by_id.constFind(local_title);
+        const auto game = std::ranges::find_if(games, [&](const Game& g) {
+            return NormalizeTitleId(g.title_id) == local_title;
+        });
+        const QString game_display = det != detected_by_id.cend() && !det->name.isEmpty()
+                                         ? det->name
+                                     : game != games.cend() ? game->name
+                                                            : unknown;
+        set_row(0, tr("Catalog game"), game_display);
         set_row(1, tr("Title ID"), local_title);
         set_row(2, tr("Target game version"), unknown);
         set_row(3, tr("Target build ID"), unknown);
@@ -889,12 +1253,14 @@ private:
         const auto* external = offer ? std::get_if<ExternalFile>(&offer->file) : nullptr;
         catalog_note->setVisible(external && external->sha256.isEmpty());
         if (offer) {
-            const auto color = offer->compatibility == Compatibility::Match
-                                   ? (dark ? QStringLiteral("#79d798") : QStringLiteral("#25623b"))
-                               : offer->compatibility == Compatibility::Mismatch
-                                   ? (dark ? QStringLiteral("#ff9595") : QStringLiteral("#a12828"))
-                                   : (dark ? QStringLiteral("#f1bf64") : QStringLiteral("#795100"));
-            compatibility_state->setStyleSheet(QStringLiteral("color: %1;").arg(color));
+            const QString color =
+                offer->compatibility == Compatibility::Match
+                    ? tokens.live.name()
+                : offer->compatibility == Compatibility::Mismatch
+                    ? tokens.danger.name()
+                    : tokens.warn.name();
+            compatibility_state->setStyleSheet(
+                QStringLiteral("color: %1; font-weight: 600;").arg(color));
             compatibility_state->setText(
                 QStringLiteral("●  %1").arg(CompatibilityName(offer->compatibility)));
             if (const auto* version = std::get_if<Version>(&offer->file)) {
@@ -953,7 +1319,7 @@ private:
         install->setText(reinstall ? tr("Reinstall") : installed ? tr("Update") : tr("Install"));
         install->setEnabled(!busy && offer && !current && CanInstall(*offer));
         source->setEnabled(!busy);
-        const auto& primary = dark ? DarkPrimaryButtonStyle : PrimaryButtonStyle;
+        const QString primary = BuildPrimaryButtonStyle(tokens, use_glass);
         const bool install_primary = install->isEnabled();
         const bool source_primary = !install_primary && !source->isHidden() && !busy;
         install->setStyleSheet(install_primary ? primary : QString{});
@@ -977,7 +1343,7 @@ private:
             } else if (external && external->ambiguous_layout) {
                 hint->setText(tr("This ZIP requires choosing components. Open GameBanana to "
                                  "install it manually."));
-            } else if (!selected->title_ids.contains(local_title)) {
+            } else if (!TargetMatchesSelected()) {
                 hint->setText(tr("This listing does not target the selected game."));
             } else if (offer->compatibility == Compatibility::Mismatch) {
                 hint->setText(
@@ -1013,7 +1379,7 @@ private:
         }
         const QUrl source_url = selected ? selected->source_url : QUrl{};
         QMessageBox prompt(QMessageBox::Warning, tr("Could not install the mod"), error,
-                           QMessageBox::Close, this);
+                           QMessageBox::Close, owner);
         auto* open = prompt.addButton(tr("View on GameBanana"), QMessageBox::ActionRole);
         prompt.exec();
         if (prompt.clickedButton() == open && !source_url.isEmpty()) {
@@ -1039,13 +1405,15 @@ private:
         busy = value;
         for (QWidget* widget :
              {static_cast<QWidget*>(game_picker), static_cast<QWidget*>(refresh),
-              static_cast<QWidget*>(all_games), static_cast<QWidget*>(preview_select),
+              static_cast<QWidget*>(all_games), static_cast<QWidget*>(my_games_btn),
+              static_cast<QWidget*>(all_catalog_btn), static_cast<QWidget*>(preview_select),
               static_cast<QWidget*>(installed_mode), static_cast<QWidget*>(search),
               static_cast<QWidget*>(game_tree), static_cast<QWidget*>(results),
               static_cast<QWidget*>(more), static_cast<QWidget*>(release),
               static_cast<QWidget*>(target_picker), static_cast<QWidget*>(close_button)}) {
             widget->setEnabled(!value);
         }
+        my_games_btn->setEnabled(!value && !detected_games.isEmpty());
         type->setEnabled(!value && !installed_mode->isChecked());
         sort->setEnabled(!value && !installed_mode->isChecked());
         UpdateButtons();
@@ -1064,7 +1432,7 @@ private:
         const auto epoch = mod_epoch;
         if (external && !unverified && chosen.compatibility == Compatibility::Unknown &&
             QMessageBox::question(
-                this, tr("Compatibility unverified"),
+                owner, tr("Compatibility unverified"),
                 tr("Lichii could not confirm that this file works with your game version. "
                    "It will check the download's SHA-256 before installing. Continue?"),
                 QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes) {
@@ -1120,21 +1488,23 @@ private:
         const auto root = context.mods_root;
         const auto target = local_title;
         const auto id = local_id;
-        auto* install_task = new QFutureWatcher<QString>(this);
-        connect(install_task, &QFutureWatcher<QString>::finished, this, [this, install_task, external] {
-            const auto error = install_task->result();
-            install_task->deleteLater();
-            if (error.isEmpty()) {
-                changed = true;
-                ReadLocal();
-            }
-            FinishOperation();
-            if (error.isEmpty()) {
-                Status(tr("Installation complete. The mod is available in Add-Ons."));
-            } else {
-                InstallFailed(error, external);
-            }
-        });
+        auto* install_task = new QFutureWatcher<QString>(owner);
+        connect(install_task, &QFutureWatcher<QString>::finished, owner,
+                [this, install_task, external] {
+                    const auto error = install_task->result();
+                    install_task->deleteLater();
+                    if (error.isEmpty()) {
+                        changed = true;
+                        ReadLocal();
+                    }
+                    FinishOperation();
+                    if (error.isEmpty()) {
+                        Status(tr("Installation complete. The mod is available in Installed."));
+                        emit owner->ModsChanged();
+                    } else {
+                        InstallFailed(error, external);
+                    }
+                });
         install_task->setFuture(QtConcurrent::run([root, target, id, label, version, file, digest,
                                                    external] {
             return InstallMod(root, target, id, label, version, file->fileName(), digest, external);
@@ -1175,6 +1545,7 @@ private:
         changed = true;
         UpdateButtons();
         Status(before ? tr("Mod disabled.") : tr("Mod enabled."));
+        emit owner->ModsChanged();
     }
 
     void RemoveInstalled() {
@@ -1182,7 +1553,7 @@ private:
             return;
         }
         const auto epoch = mod_epoch;
-        if (QMessageBox::question(this, tr("Uninstall mod"), tr("Uninstall %1?").arg(local->name),
+        if (QMessageBox::question(owner, tr("Uninstall mod"), tr("Uninstall %1?").arg(local->name),
                                   QMessageBox::Yes | QMessageBox::No,
                                   QMessageBox::No) != QMessageBox::Yes ||
             epoch != mod_epoch) {
@@ -1205,11 +1576,23 @@ private:
         Status(preference_reset
                    ? tr("Mod uninstalled.")
                    : tr("Mod uninstalled, but Lichii could not clear its saved disabled state."));
+        emit owner->ModsChanged();
     }
 
+    Widget* owner{};
     DialogContext context;
     Client client;
+    bool embedded{true};
+    GlassUi::PaletteTokens tokens;
+    bool use_glass{false};
+    bool dark{true};
+    int row_height{30};
+    bool my_games_only{false};
+    bool user_selected_game{false};
+
     QTimer debounce;
+    QList<DetectedGame> detected_games;
+    QHash<QString, DetectedGame> detected_by_id;
     QList<Game> games;
     QList<Game> incoming_games;
     QHash<QString, Mod> catalog;
@@ -1237,8 +1620,10 @@ private:
     bool busy{};
     bool applying{};
     bool reload_after_install{};
-    const bool dark = palette().color(QPalette::Window).lightness() < 128;
-    const int row_height = qMax(28, fontMetrics().height() + 10);
+
+    QLabel* detect_banner{};
+    QPushButton* my_games_btn{};
+    QPushButton* all_catalog_btn{};
     QComboBox* game_picker{};
     QComboBox* type{};
     QComboBox* sort{};
@@ -1248,6 +1633,7 @@ private:
     QLineEdit* search{};
     QTreeWidget* game_tree{};
     QTreeWidget* results{};
+    QFrame* inspector_frame{};
     QScrollArea* inspector{};
     QLabel* name{};
     QLabel* byline{};
@@ -1259,6 +1645,7 @@ private:
     QLabel* hint{};
     QLabel* status{};
     QFrame* compatibility_card{};
+    QList<QFrame*> compatibility_dividers;
     std::array<std::pair<QLabel*, QLabel*>, 8> compatibility_rows{};
     QHBoxLayout* mod_actions{};
     QDialog* progress{};
@@ -1277,10 +1664,106 @@ private:
     QPushButton* close_button{};
 };
 
+Widget::Widget(DialogContext context, QWidget* parent, bool embedded)
+    : QWidget(parent), impl(std::make_unique<Impl>(this, std::move(context), embedded)) {}
+
+Widget::~Widget() = default;
+
+bool Widget::Changed() const {
+    return impl->changed;
+}
+
+bool Widget::CanClose() const {
+    return !impl->applying && !impl->busy;
+}
+
+void Widget::CancelIfBusy() {
+    impl->CancelDownload();
+}
+
+void Widget::SetDetectedGames(QList<DetectedGame> games) {
+    impl->SetDetectedGames(std::move(games));
+}
+
+void Widget::SetSelectedTitleId(const QString& title_id) {
+    impl->user_selected_game = true;
+    impl->SelectGame(title_id, false);
+}
+
+void Widget::SetMyGamesOnly(bool my_games_only) {
+    impl->SetMyGamesOnly(my_games_only);
+}
+
+void Widget::SetCatalogGames(QList<Game> catalog_games) {
+    impl->SetCatalogGames(std::move(catalog_games));
+}
+
+void Widget::RefreshTheme() {
+    impl->RefreshTheme();
+}
+
+void Widget::RefreshAll() {
+    impl->RefreshAll();
+}
+
+QString Widget::SelectedTitleId() const {
+    return impl->title;
+}
+
+bool Widget::IsMyGamesOnly() const {
+    return impl->my_games_only;
+}
+
+int Widget::DetectedGameCount() const {
+    return static_cast<int>(impl->detected_games.size());
+}
+
+int Widget::MatchedCatalogGameCount() const {
+    return impl->MatchedCatalogGameCount();
+}
+
+QTreeWidget* Widget::GameTree() const {
+    return impl->game_tree;
+}
+
+namespace {
+
+class ModalDialog final : public QDialog {
+    Q_DECLARE_TR_FUNCTIONS(ModStore::Dialog)
+
+public:
+    ModalDialog(QWidget* parent, DialogContext ctx) : QDialog(parent) {
+        setWindowTitle(tr("Mod Store"));
+        resize(1080, 760);
+        setMinimumSize(760, 520);
+
+        auto* layout = new QVBoxLayout(this);
+        layout->setContentsMargins(0, 0, 0, 0);
+        widget = new Widget(std::move(ctx), this, false);
+        layout->addWidget(widget);
+        connect(widget, &Widget::CloseRequested, this, &ModalDialog::reject);
+    }
+
+    bool Changed() const {
+        return widget->Changed();
+    }
+
+    void reject() override {
+        if (!widget->CanClose()) {
+            widget->CancelIfBusy();
+            return;
+        }
+        QDialog::reject();
+    }
+
+private:
+    Widget* widget{};
+};
+
 } // namespace
 
 bool ShowDialog(QWidget* parent, DialogContext context) {
-    Dialog dialog(parent, std::move(context));
+    ModalDialog dialog(parent, std::move(context));
     dialog.exec();
     return dialog.Changed();
 }

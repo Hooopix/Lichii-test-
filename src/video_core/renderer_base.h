@@ -65,6 +65,10 @@ struct DlssStatus {
     Settings::NvidiaDlssPreset preset{};
 };
 
+struct Fsr4Status {
+    u64 evaluations{};
+};
+
 struct RendererSettings {
     // Screenshot
     std::atomic<bool> screenshot_requested{false};
@@ -100,6 +104,11 @@ public:
 
     /// How many NVIDIA DLSS evaluations ran so far and the mode of the last one
     [[nodiscard]] virtual DlssStatus GetDlssStatus() const {
+        return {};
+    }
+
+    /// How many AMD FSR 4 evaluations ran so far
+    [[nodiscard]] virtual Fsr4Status GetFsr4Status() const {
         return {};
     }
 

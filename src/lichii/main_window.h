@@ -153,6 +153,15 @@ namespace VkDeviceInfo {
 class Record;
 }
 
+namespace GlassUi {
+class GlassShell;
+struct InstalledAddon;
+} // namespace GlassUi
+
+namespace ModStore {
+struct DialogContext;
+} // namespace ModStore
+
 class VolumeButton : public QPushButton {
     Q_OBJECT
 public:
@@ -200,6 +209,11 @@ public:
     /// What NVIDIA DLSS ran as since the last status bar update, empty when it didn't run
     [[nodiscard]] const QString& DlssStatusText() const {
         return dlss_status_text;
+    }
+
+    /// What AMD FSR 4 ran as since the last status bar update, empty when it didn't run
+    [[nodiscard]] const QString& Fsr4StatusText() const {
+        return fsr4_status_text;
     }
 
 signals:
@@ -528,6 +542,18 @@ private:
     void OpenPerGameConfiguration(u64 title_id, const std::string& file_name);
     bool OpenModStore(QWidget* parent, u64 initial_title_id, const std::string& file_name,
                       QSet<QString>& store_toggled);
+    ModStore::DialogContext BuildModStoreContext(u64 initial_title_id,
+                                                 const std::string& file_name,
+                                                 QSet<QString>* store_toggled);
+    void SetUpGlassUi();
+    void SyncGlassShellVisibility();
+    void RefreshGlassGames();
+    void OpenGlassCommandPalette();
+    QList<GlassUi::InstalledAddon> LoadGameAddonsForGlass(u64 program_id, const QString& path);
+    bool SetGameAddonEnabledForGlass(u64 program_id, const QString& addon_key, bool enabled);
+    void InstallModZipForGlass(u64 program_id);
+    void InstallModFolderForGlass(u64 program_id);
+    void DeleteAddonForGlass(u64 program_id, const QString& addon_name, const QString& location);
     bool CheckFirmwarePresence();
     void SetFirmwareVersion();
     void SetFPSSuffix();
@@ -578,6 +604,7 @@ private:
 
     GRenderWindow* render_window = nullptr;
     GameList* game_list = nullptr;
+    GlassUi::GlassShell* glass_shell = nullptr;
     LoadingScreen* loading_screen = nullptr;
     QTimer shutdown_timer;
     QTimer emu_terminate_timer;
@@ -630,6 +657,8 @@ private:
     u64 frame_gen_frames = 0;
     u64 dlss_evaluations = 0;
     QString dlss_status_text;
+    u64 fsr4_evaluations = 0;
+    QString fsr4_status_text;
     bool frame_gen_generating = false;
     double frame_gen_fps = 0.0;
     QElapsedTimer frame_gen_fps_timer;

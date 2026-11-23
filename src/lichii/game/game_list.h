@@ -94,6 +94,8 @@ public:
     void UnloadController();
 
     void ResetViewMode();
+    void ToggleFavorite(u64 program_id);
+    void AddGamePopup(QMenu& context_menu, u64 program_id, const std::string& path);
 
 public slots:
     void SetNupConversionRunning(bool running);
@@ -156,10 +158,7 @@ private:
 
     void ValidateEntry(const QModelIndex& item);
 
-    void ToggleFavorite(u64 program_id);
-
     void PopupContextMenu(const QPoint& menu_location);
-    void AddGamePopup(QMenu& context_menu, u64 program_id, const std::string& path);
     void AddCustomDirPopup(QMenu& context_menu, QModelIndex selected);
     void AddPermDirPopup(QMenu& context_menu, QModelIndex selected);
     void AddFavoritesPopup(QMenu& context_menu);

@@ -81,6 +81,8 @@
 #include "util/controller_navigation.h"
 #include "util/overlay_dialog.h"
 
+#include "glass/glass_shell.h"
+#include "glass/glass_tokens.h"
 #include "multiplayer/state.h"
 
 // Qt Stuff //
@@ -708,6 +710,8 @@ MainWindow::MainWindow(bool has_broken_vulkan)
 #endif
 
     SetupPrepareForSleep();
+
+    SetUpGlassUi();
 
     // Some moron added a race condition to the status bar
     // so now we have to make this completely unnecessary call
@@ -2773,6 +2777,10 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
     loading_screen->show();
 
     emulation_running = true;
+    if (glass_shell != nullptr) {
+        glass_shell->SetRunningState(true, false, title_id);
+    }
+    SyncGlassShellVisibility();
     if (ui->action_Fullscreen->isChecked()) {
         ShowFullscreen();
     } else if (!(ui->action_Single_Window_Mode->isChecked() ? isMaximized()
@@ -3037,7 +3045,13 @@ void MainWindow::OnEmulationStopped() {
     render_window->hide();
     loading_screen->hide();
     loading_screen->Clear();
-    if (game_list->IsEmpty()) {
+    if (glass_shell != nullptr) {
+        glass_shell->SetRunningState(false, false, 0);
+    }
+    if (UISettings::IsGlassShellEnabled() && glass_shell != nullptr) {
+        SyncGlassShellVisibility();
+        RefreshGlassGames();
+    } else if (game_list->IsEmpty()) {
         game_list_placeholder->show();
     } else {
         game_list->show();
@@ -3060,6 +3074,10 @@ void MainWindow::OnEmulationStopped() {
 
     // Disable status bar updates
     status_bar_update_timer.stop();
+    dlss_evaluations = 0;
+    dlss_status_text.clear();
+    fsr4_evaluations = 0;
+    fsr4_status_text.clear();
     shader_building_label->setVisible(false);
     res_scale_label->setVisible(false);
     emu_speed_label->setVisible(false);
@@ -3618,6 +3636,12 @@ void MainWindow::OnGameListAddDirectory() {
 void MainWindow::OnGameListShowList(bool show) {
     if (emulation_running && ui->action_Single_Window_Mode->isChecked())
         return;
+    if (UISettings::IsGlassShellEnabled() && glass_shell != nullptr) {
+        game_list->setVisible(show);
+        game_list_placeholder->hide();
+        RefreshGlassGames();
+        return;
+    }
     game_list->setVisible(show);
     game_list_placeholder->setVisible(!show);
 };
@@ -3974,6 +3998,10 @@ void MainWindow::OnPauseContinueGame() {
             OnPauseGame();
         } else {
             OnStartGame();
+        }
+        if (glass_shell != nullptr) {
+            glass_shell->SetRunningState(true, !QtCommon::emu_thread->IsRunning(),
+                                         QtCommon::system->GetApplicationProcessProgramID());
         }
     }
 }
@@ -4365,6 +4393,9 @@ void MainWindow::SetGameListMode(Settings::GameListMode mode) {
 
     CheckIconSize();
     game_list->ResetViewMode();
+    if (glass_shell != nullptr) {
+        glass_shell->SetLibraryViewMode(mode);
+    }
 }
 
 void MainWindow::SetGridView() {
@@ -4415,6 +4446,10 @@ void MainWindow::ToggleShowGameName() {
 
 void MainWindow::OnConfigure() {
     const auto old_theme = UISettings::values.theme;
+    const bool old_use_glass = UISettings::values.use_glass_shell.GetValue();
+    const auto old_color_mode = UISettings::values.ui_color_mode.GetValue();
+    const auto old_accent = UISettings::values.ui_accent_color.GetValue();
+    const bool old_perf_mode = UISettings::values.ui_performance_mode.GetValue();
     const bool old_discord_presence = UISettings::values.enable_discord_presence.GetValue();
     const auto old_language_index = Settings::values.language_index.GetValue();
     const bool old_gamemode = UISettings::values.enable_gamemode.GetValue();
@@ -4488,8 +4523,15 @@ void MainWindow::OnConfigure() {
     }
     InitializeHotkeys();
 
-    if (UISettings::values.theme != old_theme) {
+    const bool appearance_changed =
+        UISettings::values.theme != old_theme ||
+        UISettings::values.use_glass_shell.GetValue() != old_use_glass ||
+        UISettings::values.ui_color_mode.GetValue() != old_color_mode ||
+        UISettings::values.ui_accent_color.GetValue() != old_accent ||
+        UISettings::values.ui_performance_mode.GetValue() != old_perf_mode;
+    if (appearance_changed) {
         UpdateUITheme();
+        SyncGlassShellVisibility();
     }
     if (UISettings::values.enable_discord_presence.GetValue() != old_discord_presence) {
         SetDiscordEnabled(UISettings::values.enable_discord_presence.GetValue());
@@ -4733,18 +4775,11 @@ void MainWindow::OnConfigurePerGame() {
     OpenPerGameConfiguration(title_id, current_game_path.toStdString());
 }
 
-static u64 ParseModStoreTitleId(const QString& title_id) {
-    if (title_id.size() != 16) {
-        return 0;
-    }
-    const auto id = title_id.toULongLong(nullptr, 16);
-    return title_id.compare(QString::fromStdString(fmt::format("{:016X}", id)),
-                            Qt::CaseInsensitive) == 0
-               ? id
-               : 0;
-}
-
 void MainWindow::OnOpenModStore() {
+    if (UISettings::IsGlassShellEnabled() && glass_shell != nullptr && !emulation_running) {
+        glass_shell->SetCurrentPage(GlassUi::GlassShell::Page::Mods);
+        return;
+    }
     QSet<QString> store_toggled;
     if (OpenModStore(this, 0, {}, store_toggled)) {
         OnGameListRefresh();
@@ -4775,109 +4810,9 @@ bool MainWindow::OpenModStore(QWidget* parent, u64 initial_title_id, const std::
         game_list->SetScanEnabled(true);
         mod_store_open = false;
     };
-    const auto lookup = [&](const QString& title_id) -> ModStore::GameIdentity {
-        const auto id = ParseModStoreTitleId(title_id);
-        if (id == 0) {
-            return {};
-        }
 
-        const auto open_game = [&](FileSys::VirtualFile file) -> std::unique_ptr<Loader::AppLoader> {
-            auto loader = Loader::GetLoader(system, std::move(file), id);
-            u64 actual_id{};
-            return loader && loader->ReadProgramId(actual_id) == Loader::ResultStatus::Success &&
-                           actual_id == id
-                       ? std::move(loader)
-                       : nullptr;
-        };
-        const auto open_path = [&](const std::string& path) {
-            return open_game(Core::GetGameFileFromPath(QtCommon::vfs, path));
-        };
-        const bool has_selected_path = id == initial_title_id && !file_name.empty();
-        std::unique_ptr<Loader::AppLoader> loader;
-        if (has_selected_path) {
-            loader = open_path(file_name);
-        } else {
-            const auto path = Service::NS::GetGameListApplicationPath(system, id);
-            if (path) {
-                loader = open_path(*path);
-            }
-            if (!loader) {
-                const auto* const model = game_list->GetModel();
-                const auto matches =
-                    model->match(model->index(0, 0), GameListItemPath::ProgramIdRole,
-                                 QVariant::fromValue(qulonglong{id}), -1,
-                                 Qt::MatchExactly | Qt::MatchRecursive);
-                for (const auto& match : matches) {
-                    const auto candidate = match.data(GameListItemPath::FullPathRole).toString()
-                                               .toStdString();
-                    if (!candidate.empty() && (!path || *path != candidate)) {
-                        loader = open_path(candidate);
-                        if (loader) {
-                            break;
-                        }
-                    }
-                }
-            }
-            if (!loader) {
-                loader = open_game(system.GetContentProvider().GetEntryUnparsed(
-                    id, FileSys::ContentRecordType::Program));
-            }
-        }
-        if (!loader) {
-            return {};
-        }
-
-        ModStore::GameIdentity result{.installed = true};
-        if (const auto build = loader->ReadMainBuildIdHex(system);
-            build && build->find_first_not_of('0') != std::string::npos) {
-            result.build_id = QString::fromStdString(*build);
-        }
-        const bool updatable = loader->IsRomFSUpdatable();
-        const bool native_nx = updatable && loader->GetFileType() == Loader::FileType::NX;
-        std::string version;
-        if (!native_nx && loader->ReadDisplayVersion(version) == Loader::ResultStatus::Success) {
-            result.display_version = QString::fromStdString(version).trimmed();
-        }
-        if (result.display_version.isEmpty() && updatable) {
-            const FileSys::PatchManager patch{id, system.GetFileSystemController(),
-                                             system.GetContentProvider()};
-            if (const auto control = patch.GetControlMetadata().first) {
-                result.display_version = QString::fromStdString(control->GetVersionString()).trimmed();
-            }
-        }
-        return result;
-    };
-
-    return ModStore::ShowDialog(
-        parent, {.base_url = QString::fromStdString(UISettings::values.mod_store_api_url.GetValue()),
-                 .initial_title_id =
-                     initial_title_id == 0 ? QString{}
-                                           : QString::fromStdString(fmt::format("{:016X}", initial_title_id)),
-                 .mods_root = QDir(QString::fromStdString(
-                                      Common::FS::GetEdenPathString(Common::FS::EdenPath::LoadDir)))
-                                  .absolutePath(),
-                 .game_identity = lookup,
-                 .is_enabled = [](const QString& title_id, const QString& addon) {
-                     const auto id = ParseModStoreTitleId(title_id);
-                     if (id == 0 || addon.isEmpty()) {
-                         return false;
-                     }
-                     const auto& disabled = Settings::values.disabled_addons;
-                     const auto it = disabled.find(id);
-                     return it == disabled.end() ||
-                            std::ranges::find(it->second, addon.toStdString()) == it->second.end();
-                 },
-                 .set_enabled = [&](const QString& title_id, const QString& addon, bool enabled) {
-                     const auto id = ParseModStoreTitleId(title_id);
-                     if (id == 0 || addon.isEmpty() || system.IsPoweredOn() ||
-                         !config->SetAddonEnabled(id, addon.toStdString(), enabled)) {
-                         return false;
-                     }
-                     if (id == initial_title_id) {
-                         store_toggled.insert(addon);
-                     }
-                     return true;
-                 }});
+    return ModStore::ShowDialog(parent,
+                                BuildModStoreContext(initial_title_id, file_name, &store_toggled));
 }
 
 void MainWindow::OpenPerGameConfiguration(u64 title_id, const std::string& file_name) {
@@ -6211,6 +6146,10 @@ void MainWindow::UpdateStatusBar() {
     dlss_status_label->setText(dlss_status_text);
     dlss_status_label->setVisible(!dlss_status_text.isEmpty());
 
+    const auto fsr4 = QtCommon::system->GPU().Renderer().GetFsr4Status();
+    fsr4_status_text = fsr4.evaluations > fsr4_evaluations ? tr("FSR 4") : QString{};
+    fsr4_evaluations = fsr4.evaluations;
+
     emit statsUpdated(results, shader_notify);
 
     if (shaders_building > 0) {
@@ -6948,19 +6887,50 @@ void MainWindow::UpdateMenuIcons() {
 }
 
 void MainWindow::UpdateUITheme() {
-    const QString default_theme = QString::fromUtf8(UISettings::themes[size_t(UISettings::default_theme)].second);
-    QString current_theme = QString::fromStdString(UISettings::values.theme);
+    const QString default_theme =
+        QString::fromUtf8(UISettings::themes[size_t(UISettings::default_theme)].second);
+    QString current_theme = QString::fromStdString(UISettings::EffectiveTheme());
 
     if (current_theme.isEmpty())
         current_theme = default_theme;
 
-    static bool lichii_palette = false;
+    static bool custom_palette = false;
+    const bool use_glass =
+        UISettings::IsGlassShellEnabled() || current_theme == QStringLiteral("lichii_glass");
+
+    if (use_glass) {
+        const auto tokens = GlassUi::ActiveTokens();
+        qApp->setPalette(GlassUi::BuildQPalette(tokens));
+        custom_palette = true;
+
+#ifdef _WIN32
+        QIcon::setThemeName(QStringLiteral("lichii"));
+#else
+        QIcon::setThemeName(QStringLiteral("lichii"));
+        QIcon::setThemeSearchPaths(QStringList(QStringLiteral(":/icons")));
+#endif
+
+        qApp->setStyleSheet(GlassUi::BuildStyleSheet(tokens));
+        setStyleSheet(QStringLiteral("QStatusBar::item{border: none;}"));
+
+        UpdateMenuIcons();
+        if (glass_shell != nullptr) {
+            glass_shell->RefreshTheme();
+        }
+
+#ifdef _WIN32
+        RemoveTitlebarFilter();
+        ApplyGlobalDarkTitlebar(tokens.dark);
+#endif
+        return;
+    }
+
     if (current_theme == QStringLiteral("lichii")) {
         qApp->setPalette(LichiiPalette());
-        lichii_palette = true;
-    } else if (lichii_palette) {
+        custom_palette = true;
+    } else if (custom_palette) {
         qApp->setPalette(QPalette());
-        lichii_palette = false;
+        custom_palette = false;
     }
 
 #ifdef _WIN32
@@ -6968,7 +6938,8 @@ void MainWindow::UpdateUITheme() {
     AdjustLinkColor();
 #else
     if (current_theme == QStringLiteral("default") || current_theme == QStringLiteral("colorful")) {
-        QIcon::setThemeName(current_theme == QStringLiteral("colorful") ? current_theme : startup_icon_theme);
+        QIcon::setThemeName(current_theme == QStringLiteral("colorful") ? current_theme
+                                                                        : startup_icon_theme);
         QIcon::setThemeSearchPaths(QStringList(default_theme_paths));
         if (isDarkMode()) {
             current_theme = QStringLiteral("default_dark");
@@ -6994,13 +6965,14 @@ void MainWindow::UpdateUITheme() {
     QFile f(theme_uri);
     if (f.open(QFile::ReadOnly | QFile::Text)) {
         QTextStream ts(&f);
-        qApp->setStyleSheet(ts.readAll());
-        setStyleSheet(ts.readAll());
+        const QString style = ts.readAll();
+        qApp->setStyleSheet(style);
+        setStyleSheet(QStringLiteral("QStatusBar::item{border: none;}"));
     } else {
         LOG_ERROR(Frontend, "Unable to set style \"{}\", stylesheet file not found",
                   UISettings::values.theme);
         qApp->setStyleSheet({});
-        setStyleSheet({});
+        setStyleSheet(QStringLiteral("QStatusBar::item{border: none;}"));
     }
 
     UpdateMenuIcons();

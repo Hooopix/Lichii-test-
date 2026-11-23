@@ -11,6 +11,7 @@
 #include <vector>
 #include <QByteArray>
 #include <QMetaType>
+#include <QPoint>
 #include <QString>
 #include <QStringList>
 #include <QVector>
@@ -39,7 +40,10 @@ extern template class Setting<unsigned long long>;
 
 namespace UISettings {
 
+bool IsSystemDarkMode();
+std::string EffectiveTheme();
 bool IsDarkTheme();
+bool IsGlassShellEnabled();
 
 struct ContextualShortcut {
     std::string keyseq;
@@ -55,6 +59,7 @@ struct Shortcut {
 };
 
 enum class Theme {
+    Auto,
     Default,
     DefaultColorful,
     Dark,
@@ -62,11 +67,12 @@ enum class Theme {
     MidnightBlue,
     MidnightBlueColorful,
     LichiiDark,
+    LichiiGlass,
 };
 
 static constexpr Theme default_theme{Theme::LichiiDark};
 
-using Themes = std::array<std::pair<const char*, const char*>, 7>;
+using Themes = std::array<std::pair<const char*, const char*>, 9>;
 extern const Themes themes;
 
 struct GameDir {
@@ -90,11 +96,16 @@ struct Values {
     QByteArray renderwindow_geometry;
 
     QByteArray gamelist_header_state;
+    QPoint perf_overlay_offset{25, 75};
 
     Setting<bool> single_window_mode{linkage, true, "singleWindowMode", Category::Ui};
     Setting<bool> fullscreen{linkage, false, "fullscreen", Category::Ui};
     Setting<bool> show_filter_bar{linkage, true, "showFilterBar", Category::Ui};
     Setting<bool> show_status_bar{linkage, true, "showStatusBar", Category::Ui};
+    Setting<bool> use_glass_shell{linkage, true, "use_glass_shell", Category::Ui};
+    Setting<bool> ui_performance_mode{linkage, false, "ui_performance_mode", Category::Ui};
+    Setting<std::string> ui_accent_color{linkage, "#f0386b", "ui_accent_color", Category::Ui};
+    Setting<std::string> ui_color_mode{linkage, "dark", "ui_color_mode", Category::Ui};
 
     SwitchableSetting<ConfirmStop> confirm_before_stopping{linkage,
                                                            ConfirmStop::Ask_Always,

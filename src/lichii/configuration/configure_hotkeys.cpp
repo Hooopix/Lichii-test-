@@ -8,6 +8,7 @@
 
 #include <QMenu>
 #include <QMessageBox>
+#include <QRegularExpression>
 #include <QStandardItemModel>
 #include <QTimer>
 
@@ -89,9 +90,19 @@ ConfigureHotkeys::ConfigureHotkeys(Core::HID::HIDCore& hid_core, QWidget* parent
     RetranslateUI();
 }
 
-ConfigureHotkeys::~ConfigureHotkeys() = default;
+ConfigureHotkeys::~ConfigureHotkeys() {
+    if (timeout_timer->isActive() || poll_timer->isActive() || input_setter.has_value()) {
+        timeout_timer->stop();
+        poll_timer->stop();
+        input_setter = std::nullopt;
+        if (controller != nullptr) {
+            controller->EnableConfiguration();
+        }
+    }
+}
 
 void ConfigureHotkeys::Populate(const HotkeyRegistry& registry) {
+    model->removeRows(0, model->rowCount());
     for (const auto& group : registry.hotkey_groups) {
         QString parent_item_data = QString::fromStdString(group.first);
         auto* parent_item =
@@ -117,6 +128,44 @@ void ConfigureHotkeys::Populate(const HotkeyRegistry& registry) {
     ui->hotkey_list->expandAll();
     ui->hotkey_list->resizeColumnToContents(hotkey_column);
     ui->hotkey_list->resizeColumnToContents(controller_column);
+}
+
+bool ConfigureHotkeys::SetSearchFilter(const QString& query) {
+    const QStringList tokens =
+        query.trimmed().toLower().split(QRegularExpression(QStringLiteral("\\s+")),
+                                        Qt::SkipEmptyParts);
+    bool any_match = false;
+    for (int r = 0; r < model->rowCount(); ++r) {
+        const QStandardItem* parent = model->item(r, 0);
+        if (parent == nullptr) {
+            continue;
+        }
+        const QModelIndex parent_index = parent->index();
+        bool group_has_match = false;
+        for (int c = 0; c < parent->rowCount(); ++c) {
+            const QString hay = (parent->child(c, name_column)->text() + QLatin1Char(' ') +
+                                 parent->child(c, hotkey_column)->text() + QLatin1Char(' ') +
+                                 parent->child(c, controller_column)->text())
+                                    .toLower();
+            bool matched = true;
+            for (const QString& token : tokens) {
+                if (!hay.contains(token)) {
+                    matched = false;
+                    break;
+                }
+            }
+            ui->hotkey_list->setRowHidden(c, parent_index, !matched);
+            if (matched) {
+                group_has_match = true;
+                any_match = true;
+            }
+        }
+        ui->hotkey_list->setRowHidden(r, QModelIndex(), !group_has_match);
+        if (group_has_match) {
+            ui->hotkey_list->expand(parent_index);
+        }
+    }
+    return tokens.isEmpty() || any_match;
 }
 
 void ConfigureHotkeys::changeEvent(QEvent* event) {
@@ -167,7 +216,8 @@ void ConfigureHotkeys::Configure(QModelIndex index) {
     }
     const auto [key_sequence_used, used_action] = IsUsedKey(key_sequence);
 
-    if (key_sequence_used && key_sequence != QKeySequence(previous_key.toString())) {
+    if (key_sequence_used &&
+        key_sequence != QKeySequence::fromString(previous_key.toString(), QKeySequence::NativeText)) {
         QMessageBox::warning(
             this, tr("Conflicting Key Sequence"),
             tr("The entered key sequence is already assigned to: %1").arg(used_action));
@@ -190,10 +240,14 @@ void ConfigureHotkeys::ConfigureController(QModelIndex index) {
 
         const QString button_string =
             GetButtonCombinationName(pressed_buttons, pressed_home_button, pressed_capture_button);
+        if (button_string.isEmpty() || button_string == tr("Invalid")) {
+            model->setData(index, previous_key);
+            return;
+        }
 
         const auto [key_sequence_used, used_action] = IsUsedControllerKey(button_string);
 
-        if (key_sequence_used) {
+        if (key_sequence_used && button_string != previous_key.toString()) {
             QMessageBox::warning(
                 this, tr("Conflicting Key Sequence"),
                 tr("The entered key sequence is already assigned to: %1").arg(used_action));
@@ -218,11 +272,12 @@ void ConfigureHotkeys::ConfigureController(QModelIndex index) {
 void ConfigureHotkeys::SetPollingResult(const bool cancel) {
     timeout_timer->stop();
     poll_timer->stop();
-    (*input_setter)(cancel);
+    if (input_setter.has_value()) {
+        (*input_setter)(cancel);
+        input_setter = std::nullopt;
+    }
     // Re-Enable configuration
     controller->EnableConfiguration();
-
-    input_setter = std::nullopt;
 }
 
 QString ConfigureHotkeys::GetButtonCombinationName(Core::HID::NpadButton button,
@@ -341,7 +396,8 @@ void ConfigureHotkeys::ApplyConfiguration(HotkeyRegistry& registry) {
                 for (auto& [action_name, hotkey] : sub_actions) {
                     if (action_name != action->data().toString().toStdString())
                         continue;
-                    hotkey.keyseq = QKeySequence(keyseq->text());
+                    hotkey.keyseq =
+                        QKeySequence::fromString(keyseq->text(), QKeySequence::NativeText);
                     hotkey.controller_keyseq = controller_keyseq->text().toStdString();
                 }
             }
@@ -359,8 +415,9 @@ void ConfigureHotkeys::RestoreDefaults() {
             if (hotkey == nullptr) {
                 continue;
             }
-            parent->child(r2, hotkey_column)
-                ->setText(QString::fromStdString(hotkey->shortcut.keyseq));
+            const QKeySequence seq = QKeySequence::fromString(
+                QString::fromStdString(hotkey->shortcut.keyseq), QKeySequence::PortableText);
+            parent->child(r2, hotkey_column)->setText(seq.toString(QKeySequence::NativeText));
             parent->child(r2, controller_column)
                 ->setText(QString::fromStdString(hotkey->shortcut.controller_keyseq));
         }
@@ -431,10 +488,12 @@ void ConfigureHotkeys::RestoreHotkey(QModelIndex index) {
         return;
     }
     const QKeySequence default_key_sequence = QKeySequence::fromString(
-        QString::fromStdString(hotkey->shortcut.keyseq), QKeySequence::NativeText);
+        QString::fromStdString(hotkey->shortcut.keyseq), QKeySequence::PortableText);
     const auto [key_sequence_used, used_action] = IsUsedKey(default_key_sequence);
 
-    if (key_sequence_used && default_key_sequence != QKeySequence(model->data(index).toString())) {
+    if (key_sequence_used &&
+        default_key_sequence !=
+            QKeySequence::fromString(model->data(index).toString(), QKeySequence::NativeText)) {
         QMessageBox::warning(
             this, tr("Conflicting Key Sequence"),
             tr("The default key sequence is already assigned to: %1").arg(used_action));

@@ -13,6 +13,24 @@ GameListSearchField::KeyReleaseEater::KeyReleaseEater(GameList* gamelist_, QObje
 
 // EventFilter in order to process systemkeys while editing the searchfield
 bool GameListSearchField::KeyReleaseEater::eventFilter(QObject* obj, QEvent* event) {
+    if (event->type() == QEvent::ShortcutOverride) {
+        auto* const keyEvent = static_cast<QKeyEvent*>(event);
+        const bool is_edit_shortcut =
+            keyEvent->matches(QKeySequence::Copy) || keyEvent->matches(QKeySequence::Cut) ||
+            keyEvent->matches(QKeySequence::Paste) || keyEvent->matches(QKeySequence::Undo) ||
+            keyEvent->matches(QKeySequence::Redo) || keyEvent->matches(QKeySequence::SelectAll);
+        const bool is_volume_char =
+            (keyEvent->modifiers() == Qt::NoModifier ||
+             keyEvent->modifiers() == Qt::ShiftModifier) &&
+            (keyEvent->key() == Qt::Key_Minus || keyEvent->key() == Qt::Key_Equal ||
+             keyEvent->key() == Qt::Key_Plus || keyEvent->key() == Qt::Key_Underscore);
+        if (is_edit_shortcut || is_volume_char) {
+            event->accept();
+            return true;
+        }
+        return QObject::eventFilter(obj, event);
+    }
+
     // If it isn't a KeyRelease event then continue with standard event processing
     if (event->type() != QEvent::KeyRelease)
         return QObject::eventFilter(obj, event);
@@ -96,10 +114,9 @@ GameListSearchField::GameListSearchField(GameList* parent) : QWidget{parent} {
     button_filter_close->setText(QStringLiteral("X"));
     button_filter_close->setCursor(Qt::ArrowCursor);
     button_filter_close->setStyleSheet(
-        QStringLiteral("QToolButton{ border: none; padding: 0px; color: "
-                       "#000000; font-weight: bold; background: #F0F0F0; }"
-                       "QToolButton:hover{ border: none; padding: 0px; color: "
-                       "#EEEEEE; font-weight: bold; background: #E81123}"));
+        QStringLiteral("QToolButton{ border: none; border-radius: 4px; padding: 2px 6px; "
+                       "color: palette(text); font-weight: bold; background: transparent; }"
+                       "QToolButton:hover{ border: none; color: #FFFFFF; background: #E81123; }"));
     connect(button_filter_close, &QToolButton::clicked, parent, &GameList::OnFilterCloseClicked);
     layout_filter->setSpacing(10);
     layout_filter->addWidget(label_filter);

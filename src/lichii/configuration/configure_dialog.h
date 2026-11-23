@@ -10,6 +10,8 @@
 #include <vector>
 #include <QDialog>
 #include <QHash>
+#include <QSet>
+#include <QString>
 #include "configuration/shared_widget.h"
 #include "qt_common/config/shared_translation.h"
 #include "qt_common/util/vk.h"
@@ -71,6 +73,7 @@ signals:
 private:
     void changeEvent(QEvent* event) override;
     void showEvent(QShowEvent* event) override;
+    void keyPressEvent(QKeyEvent* event) override;
     void RetranslateUI();
 
     /// Widens the dialog until the open page and its tab row fit without a horizontal scrollbar,
@@ -78,6 +81,8 @@ private:
     void FitPageWidth();
 
     void HandleApplyButtonClicked();
+    void ApplySearchFilter(const QString& query);
+    void ScrollToFirstMatch();
 
     void SetConfiguration();
     void UpdateVisibleTabs();
@@ -109,4 +114,8 @@ private:
 
     /// The scroll area each tab is shown in, created when its category is first opened.
     QHash<QWidget*, QScrollArea*> scroll_areas;
+    QString active_search_query;
+    QSet<QWidget*> matched_tabs;
+    QHash<QWidget*, QWidget*> first_match_by_tab;
+    QList<QWidget*> highlighted_widgets;
 };

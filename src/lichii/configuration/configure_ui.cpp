@@ -10,10 +10,12 @@
 #include <utility>
 
 #include <QCheckBox>
+#include <QColorDialog>
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDirIterator>
 #include <QFileDialog>
+#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -23,6 +25,7 @@
 #include <QToolButton>
 #include <QTranslator>
 #include <QVariant>
+#include <QVBoxLayout>
 
 #include "common/common_types.h"
 #include "common/fs/path_util.h"
@@ -31,6 +34,7 @@
 #include "core/core.h"
 #include "core/frontend/framebuffer_layout.h"
 #include "lichii/configuration/iidb_key_dialog.h"
+#include "lichii/glass/glass_tokens.h"
 #include "ui_configure_ui.h"
 
 #include "qt_common/config/uisettings.h"
@@ -69,6 +73,14 @@ QString LanguageName(const QString& locale) {
     return QStringLiteral("%1 (%2)").arg(QLocale::languageToString(language.language()),
                                          QLocale::territoryToString(language.territory()));
 }
+
+bool UsesLichiiGameListIcons() {
+    if (UISettings::IsGlassShellEnabled()) {
+        return true;
+    }
+    const auto theme = UISettings::EffectiveTheme();
+    return theme == "lichii" || theme == "lichii_glass";
+}
 } // Anonymous namespace
 
 static float GetUpFactor(Settings::ResolutionSetup res_setup) {
@@ -106,6 +118,7 @@ ConfigureUi::ConfigureUi(Core::System& system_, QWidget* parent)
       ratio{Settings::values.aspect_ratio.GetValue()},
       resolution_setting{Settings::values.resolution_setup.GetValue()}, system{system_} {
     ui->setupUi(this);
+    InitializeAppearanceSection();
     connect(ui->iidb_api_key, &QPushButton::clicked, this, [this] { IiDB::ConfigureKey(this); });
 
     // Optional SteamGridDB artwork lookup for games without artwork; off while the key is empty.
@@ -148,19 +161,6 @@ ConfigureUi::ConfigureUi(Core::System& system_, QWidget* parent)
 
     SetConfiguration();
 
-    // Force game list reload if any of the relevant settings are changed.
-    connect(ui->show_add_ons, &QCheckBox::STATE_CHANGED, this, &ConfigureUi::RequestGameListUpdate);
-    connect(ui->show_size, &QCheckBox::STATE_CHANGED, this, &ConfigureUi::RequestGameListUpdate);
-    connect(ui->show_types, &QCheckBox::STATE_CHANGED, this, &ConfigureUi::RequestGameListUpdate);
-    connect(ui->show_play_time, &QCheckBox::STATE_CHANGED, this,
-            &ConfigureUi::RequestGameListUpdate);
-    connect(ui->folder_icon_size_combobox, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &ConfigureUi::RequestGameListUpdate);
-    connect(ui->row_1_text_combobox, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-            &ConfigureUi::RequestGameListUpdate);
-    connect(ui->row_2_text_combobox, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-            &ConfigureUi::RequestGameListUpdate);
-
     // Update text ComboBoxes after user interaction.
     connect(ui->row_1_text_combobox, QOverload<int>::of(&QComboBox::activated),
             [this] { ConfigureUi::UpdateSecondRowComboBox(); });
@@ -168,7 +168,7 @@ ConfigureUi::ConfigureUi(Core::System& system_, QWidget* parent)
             [this] { ConfigureUi::UpdateFirstRowComboBox(); });
 
     // Set screenshot path to user specification.
-    connect(ui->screenshot_path_button, &QToolButton::pressed, this, [this] {
+    connect(ui->screenshot_path_button, &QToolButton::clicked, this, [this] {
         auto dir =
             QFileDialog::getExistingDirectory(this, tr("Select Screenshots Path..."),
                                               QString::fromStdString(Common::FS::GetEdenPathString(
@@ -189,7 +189,95 @@ ConfigureUi::ConfigureUi(Core::System& system_, QWidget* parent)
 
 ConfigureUi::~ConfigureUi() = default;
 
+void ConfigureUi::InitializeAppearanceSection() {
+    auto* box = new QGroupBox(tr("Glass Interface & Appearance"), this);
+    auto* vbox = new QVBoxLayout(box);
+    vbox->setSpacing(8);
+
+    auto* shell_row = new QHBoxLayout;
+    shell_row->addWidget(new QLabel(tr("Interface Shell:"), box));
+    shell_mode_combobox = new QComboBox(box);
+    shell_mode_combobox->addItem(tr("Glass (Horizon Shell)"), true);
+    shell_mode_combobox->addItem(tr("Classic (Traditional Menu & Game List)"), false);
+    shell_row->addWidget(shell_mode_combobox, 1);
+    vbox->addLayout(shell_row);
+
+    auto* mode_row = new QHBoxLayout;
+    mode_row->addWidget(new QLabel(tr("Color Mode:"), box));
+    color_mode_combobox = new QComboBox(box);
+    color_mode_combobox->addItem(tr("System (Auto)"), QStringLiteral("system"));
+    color_mode_combobox->addItem(tr("Dark"), QStringLiteral("dark"));
+    color_mode_combobox->addItem(tr("Light"), QStringLiteral("light"));
+    mode_row->addWidget(color_mode_combobox, 1);
+    vbox->addLayout(mode_row);
+
+    auto* accent_row = new QHBoxLayout;
+    accent_row->addWidget(new QLabel(tr("Accent Color:"), box));
+    for (const auto& preset : GlassUi::AccentPresets) {
+        const QString hex = QString::fromLatin1(preset.hex);
+        auto* swatch = new QPushButton(box);
+        swatch->setFixedSize(26, 26);
+        swatch->setToolTip(QString::fromUtf8(preset.name));
+        swatch->setCursor(Qt::PointingHandCursor);
+        connect(swatch, &QPushButton::clicked, this, [this, hex] {
+            selected_accent_hex = hex;
+            UpdateAccentButtons();
+        });
+        accent_swatch_buttons.push_back({swatch, hex});
+        accent_row->addWidget(swatch);
+    }
+    custom_accent_button = new QPushButton(tr("Custom…"), box);
+    connect(custom_accent_button, &QPushButton::clicked, this, [this] {
+        const QColor chosen =
+            QColorDialog::getColor(GlassUi::ParseAccentColor(selected_accent_hex), this,
+                                   tr("Choose Accent Color"));
+        if (chosen.isValid()) {
+            selected_accent_hex = chosen.name();
+            UpdateAccentButtons();
+        }
+    });
+    accent_row->addWidget(custom_accent_button);
+    accent_row->addStretch();
+    vbox->addLayout(accent_row);
+
+    performance_mode_checkbox =
+        new QCheckBox(tr("Performance Mode (disable backdrop blur and switch animations)"), box);
+    vbox->addWidget(performance_mode_checkbox);
+
+    ui->verticalLayout->insertWidget(0, box);
+}
+
+void ConfigureUi::UpdateAccentButtons() {
+    for (const auto& [btn, hex] : accent_swatch_buttons) {
+        const bool selected = selected_accent_hex.compare(hex, Qt::CaseInsensitive) == 0;
+        btn->setStyleSheet(
+            QStringLiteral("QPushButton { background: %1; border: %2px solid %3; "
+                           "border-radius: 13px; padding: 0; min-height: 0; }")
+                .arg(hex)
+                .arg(selected ? 3 : 1)
+                .arg(selected ? QStringLiteral("#ffffff") : QStringLiteral("rgba(255,255,255,90)")));
+    }
+}
+
 void ConfigureUi::ApplyConfiguration() {
+    const bool old_show_add_ons = UISettings::values.show_add_ons.GetValue();
+    const bool old_show_size = UISettings::values.show_size.GetValue();
+    const bool old_show_types = UISettings::values.show_types.GetValue();
+    const bool old_show_play_time = UISettings::values.show_play_time.GetValue();
+    const u32 old_folder_icon_size = UISettings::values.folder_icon_size.GetValue();
+    const u32 old_row_1 = UISettings::values.row_1_text_id.GetValue();
+    const u32 old_row_2 = UISettings::values.row_2_text_id.GetValue();
+    const std::string old_sgdb = UISettings::values.steamgriddb_api_key.GetValue();
+    const bool old_lichii_icons = UsesLichiiGameListIcons();
+
+    UISettings::values.use_glass_shell = shell_mode_combobox->currentData().toBool();
+    UISettings::values.ui_color_mode =
+        color_mode_combobox->currentData().toString().toStdString();
+    UISettings::values.ui_performance_mode = performance_mode_checkbox->isChecked();
+    if (!selected_accent_hex.isEmpty()) {
+        UISettings::values.ui_accent_color = selected_accent_hex.toStdString();
+    }
+
     UISettings::values.theme =
         ui->theme_combobox->itemData(ui->theme_combobox->currentIndex()).toString().toStdString();
     UISettings::values.show_add_ons = ui->show_add_ons->isChecked();
@@ -209,7 +297,20 @@ void ConfigureUi::ApplyConfiguration() {
     const u32 height = ScreenshotDimensionToInt(ui->screenshot_height->currentText());
     UISettings::values.screenshot_height.SetValue(height);
 
-    RequestGameListUpdate();
+    const bool game_list_changed =
+        old_show_add_ons != UISettings::values.show_add_ons.GetValue() ||
+        old_show_size != UISettings::values.show_size.GetValue() ||
+        old_show_types != UISettings::values.show_types.GetValue() ||
+        old_show_play_time != UISettings::values.show_play_time.GetValue() ||
+        old_folder_icon_size != UISettings::values.folder_icon_size.GetValue() ||
+        old_row_1 != UISettings::values.row_1_text_id.GetValue() ||
+        old_row_2 != UISettings::values.row_2_text_id.GetValue() ||
+        old_sgdb != UISettings::values.steamgriddb_api_key.GetValue() ||
+        old_lichii_icons != UsesLichiiGameListIcons();
+
+    if (game_list_changed) {
+        RequestGameListUpdate();
+    }
     system.ApplySettings();
 }
 
@@ -218,6 +319,18 @@ void ConfigureUi::RequestGameListUpdate() {
 }
 
 void ConfigureUi::SetConfiguration() {
+    shell_mode_combobox->setCurrentIndex(
+        shell_mode_combobox->findData(UISettings::values.use_glass_shell.GetValue()));
+    const int mode_idx = color_mode_combobox->findData(
+        QString::fromStdString(UISettings::values.ui_color_mode.GetValue()));
+    color_mode_combobox->setCurrentIndex(mode_idx >= 0 ? mode_idx : 1);
+    performance_mode_checkbox->setChecked(UISettings::values.ui_performance_mode.GetValue());
+    selected_accent_hex =
+        GlassUi::ParseAccentColor(
+            QString::fromStdString(UISettings::values.ui_accent_color.GetValue()))
+            .name();
+    UpdateAccentButtons();
+
     steamgriddb_key_edit->setText(
         QString::fromStdString(UISettings::values.steamgriddb_api_key.GetValue()));
     ui->theme_combobox->setCurrentIndex(

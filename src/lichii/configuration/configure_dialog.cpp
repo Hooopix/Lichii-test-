@@ -8,10 +8,12 @@
 #include <array>
 #include <memory>
 #include <tuple>
+#include <QKeyEvent>
 #include <QPushButton>
 #include <QScreen>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QShortcut>
 #include <QStackedWidget>
 #include <QStyle>
 #include <QTabBar>
@@ -20,6 +22,7 @@
 #include "common/settings.h"
 #include "common/settings_enums.h"
 #include "core/core.h"
+#include "lichii/glass/settings_search.h"
 #include "qt_common/config/uisettings.h"
 #include "qt_common/util/vk.h"
 #include "ui_configure.h"
@@ -132,8 +135,11 @@ ConfigureDialog::ConfigureDialog(QWidget* parent, HotkeyRegistry& registry_,
     PopulateSelectionList();
 
     connect(ui->tabWidget, &QTabWidget::currentChanged, this, [this](int index) {
-        if (index != -1) {
+        if (index != -1 && active_search_query.isEmpty()) {
             debug_tab_tab->SetCurrentIndex(0);
+        }
+        if (index != -1 && !active_search_query.isEmpty()) {
+            QTimer::singleShot(0, this, &ConfigureDialog::ScrollToFirstMatch);
         }
     });
     connect(ui->tabWidget, &QTabWidget::currentChanged, this,
@@ -143,6 +149,13 @@ ConfigureDialog::ConfigureDialog(QWidget* parent, HotkeyRegistry& registry_,
             &ConfigureDialog::ExternalContentDirsChanged);
     connect(ui->selectorList, &QListWidget::itemSelectionChanged, this,
             &ConfigureDialog::UpdateVisibleTabs);
+    connect(ui->searchEdit, &QLineEdit::textChanged, this, &ConfigureDialog::ApplySearchFilter);
+
+    auto* find_shortcut = new QShortcut(QKeySequence::Find, this);
+    connect(find_shortcut, &QShortcut::activated, this, [this] {
+        ui->searchEdit->setFocus();
+        ui->searchEdit->selectAll();
+    });
 
     if (system.IsPoweredOn()) {
         QPushButton* apply_button = ui->buttonBox->addButton(QDialogButtonBox::Apply);
@@ -159,7 +172,9 @@ ConfigureDialog::ConfigureDialog(QWidget* parent, HotkeyRegistry& registry_,
     ui->buttonBox->setFocus();
 }
 
-ConfigureDialog::~ConfigureDialog() = default;
+ConfigureDialog::~ConfigureDialog() {
+    GlassUi::ClearSearchHighlights(highlighted_widgets);
+}
 
 void ConfigureDialog::SetConfiguration() {}
 
@@ -199,6 +214,15 @@ void ConfigureDialog::changeEvent(QEvent* event) {
 void ConfigureDialog::showEvent(QShowEvent* event) {
     QDialog::showEvent(event);
     QTimer::singleShot(0, this, &ConfigureDialog::FitPageWidth);
+}
+
+void ConfigureDialog::keyPressEvent(QKeyEvent* event) {
+    if (event->key() == Qt::Key_Escape && !ui->searchEdit->text().isEmpty()) {
+        ui->searchEdit->clear();
+        event->accept();
+        return;
+    }
+    QDialog::keyPressEvent(event);
 }
 
 void ConfigureDialog::FitPageWidth() {
@@ -283,6 +307,70 @@ void ConfigureDialog::HandleApplyButtonClicked() {
     ApplyConfiguration();
 }
 
+void ConfigureDialog::ApplySearchFilter(const QString& query) {
+    GlassUi::ClearSearchHighlights(highlighted_widgets);
+    matched_tabs.clear();
+    first_match_by_tab.clear();
+    active_search_query = query.trimmed();
+
+    if (active_search_query.isEmpty()) {
+        hotkeys_tab->SetSearchFilter({});
+        for (int row = 0; row < ui->selectorList->count(); ++row) {
+            ui->selectorList->item(row)->setHidden(false);
+        }
+        ui->searchStatusLabel->clear();
+        UpdateVisibleTabs();
+        return;
+    }
+
+    int first_visible_row = -1;
+    int matched_tab_count = 0;
+    for (int row = 0; row < ui->selectorList->count(); ++row) {
+        auto* const item = ui->selectorList->item(row);
+        const auto tabs = qvariant_cast<QList<QWidget*>>(item->data(Qt::UserRole));
+        bool category_matched = false;
+        for (auto* const tab : tabs) {
+            const auto res =
+                GlassUi::SearchConfigTab(tab, active_search_query, highlighted_widgets);
+            if (res.matched) {
+                category_matched = true;
+                matched_tabs.insert(tab);
+                ++matched_tab_count;
+                if (res.first_match != nullptr) {
+                    first_match_by_tab.insert(tab, res.first_match);
+                }
+            }
+        }
+        item->setHidden(!category_matched);
+        if (category_matched && first_visible_row < 0) {
+            first_visible_row = row;
+        }
+    }
+
+    ui->searchStatusLabel->setText(matched_tab_count == 0
+                                       ? tr("No matching settings")
+                                       : tr("%n tab(s) matched", "", matched_tab_count));
+
+    const auto* current = ui->selectorList->currentItem();
+    if (first_visible_row >= 0 && (current == nullptr || current->isHidden())) {
+        const QSignalBlocker block(ui->selectorList);
+        ui->selectorList->setCurrentRow(first_visible_row);
+    }
+
+    UpdateVisibleTabs();
+    QTimer::singleShot(0, this, &ConfigureDialog::ScrollToFirstMatch);
+}
+
+void ConfigureDialog::ScrollToFirstMatch() {
+    auto* const area = qobject_cast<QScrollArea*>(ui->tabWidget->currentWidget());
+    if (area == nullptr || area->widget() == nullptr) {
+        return;
+    }
+    if (auto* const target = first_match_by_tab.value(area->widget(), nullptr)) {
+        area->ensureWidgetVisible(target, 24, 48);
+    }
+}
+
 Q_DECLARE_METATYPE(QList<QWidget*>);
 
 void ConfigureDialog::PopulateSelectionList() {
@@ -326,7 +414,8 @@ void ConfigureDialog::OnLanguageChanged(const QString& locale) {
 
 void ConfigureDialog::UpdateVisibleTabs() {
     const auto items = ui->selectorList->selectedItems();
-    if (items.isEmpty()) {
+    if (items.isEmpty() || items[0]->isHidden()) {
+        ui->tabWidget->clear();
         return;
     }
 
@@ -337,6 +426,9 @@ void ConfigureDialog::UpdateVisibleTabs() {
     const auto tabs = qvariant_cast<QList<QWidget*>>(items[0]->data(Qt::UserRole));
 
     for (auto* const tab : tabs) {
+        if (!active_search_query.isEmpty() && !matched_tabs.contains(tab)) {
+            continue;
+        }
         LOG_DEBUG(Frontend, "{}", tab->accessibleName().toStdString());
         auto& area = scroll_areas[tab];
         if (area == nullptr) {

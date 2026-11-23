@@ -4,6 +4,7 @@
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
+set(CMAKE_AUTOUIC_SEARCH_PATHS "${CMAKE_CURRENT_SOURCE_DIR}")
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
 # Set the RPATH for Qt Libraries
@@ -18,6 +19,7 @@ option(LICHII_USE_PENDING_RELEASE_NOTES "Show the staged What's new notes for th
 
 if(LICHII_TESTS)
     add_subdirectory(../tests/qt_compatibility ${CMAKE_BINARY_DIR}/qt_compatibility_tests)
+    add_subdirectory(../tests/qt_glass_ui ${CMAKE_BINARY_DIR}/qt_glass_ui_tests)
     add_subdirectory(../tests/qt_iidb ${CMAKE_BINARY_DIR}/qt_iidb_tests)
     add_subdirectory(../tests/qt_whats_new ${CMAKE_BINARY_DIR}/qt_whats_new_tests)
 endif()
@@ -178,6 +180,7 @@ add_executable(lichii
     debugger/controller.h
 
     game/artwork_image.cpp game/artwork_image.h
+    game/game_filter_proxy.h
     game/iidb_client.cpp game/iidb_client.h
     game/game_list.cpp game/game_list.h
     game/game_grid.cpp game/game_grid.h
@@ -185,6 +188,18 @@ add_executable(lichii
     game/game_tree.h game/game_tree.cpp
     game/game_card.h game/game_card.cpp
     game/search_field.h game/search_field.cpp
+
+    glass/glass_command_palette.cpp glass/glass_command_palette.h
+    glass/glass_game_entry.h
+    glass/glass_home_page.cpp glass/glass_home_page.h
+    glass/glass_mods_page.cpp glass/glass_mods_page.h
+    glass/glass_multiplayer_page.cpp glass/glass_multiplayer_page.h
+    glass/glass_settings_page.cpp glass/glass_settings_page.h
+    glass/glass_shell.cpp glass/glass_shell.h
+    glass/glass_tokens.cpp glass/glass_tokens.h
+    glass/glass_widgets.cpp glass/glass_widgets.h
+    glass/main_window_glass.cpp
+    glass/settings_search.cpp glass/settings_search.h
 
     hotkeys.cpp
     hotkeys.h
@@ -222,6 +237,7 @@ add_executable(lichii
     multiplayer/state.h
     multiplayer/validation.h
     startup_checks.cpp
+    startup_checks_config.cpp
     startup_checks.h
     set_play_time_dialog.cpp
     set_play_time_dialog.h

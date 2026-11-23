@@ -22,9 +22,10 @@ void HotkeyRegistry::SaveHotkeys() {
         for (const auto& hotkey : group.second) {
             UISettings::values.shortcuts.push_back(
                 {hotkey.first, group.first,
-                 UISettings::ContextualShortcut({hotkey.second.keyseq.toString().toStdString(),
-                                                 hotkey.second.controller_keyseq,
-                                                 hotkey.second.context, hotkey.second.repeat})});
+                 UISettings::ContextualShortcut(
+                     {hotkey.second.keyseq.toString(QKeySequence::PortableText).toStdString(),
+                      hotkey.second.controller_keyseq, hotkey.second.context,
+                      hotkey.second.repeat})});
         }
     }
 }
@@ -34,23 +35,23 @@ void HotkeyRegistry::LoadHotkeys() {
     // beginGroup()
     for (auto shortcut : UISettings::values.shortcuts) {
         Hotkey& hk = hotkey_groups[shortcut.group][shortcut.name];
-        if (!shortcut.shortcut.keyseq.empty()) {
-            hk.keyseq = QKeySequence::fromString(QString::fromStdString(shortcut.shortcut.keyseq),
-                                                 QKeySequence::NativeText);
-            hk.context = static_cast<Qt::ShortcutContext>(shortcut.shortcut.context);
-        }
-        if (!shortcut.shortcut.controller_keyseq.empty()) {
-            hk.controller_keyseq = shortcut.shortcut.controller_keyseq;
-        }
+        hk.keyseq = shortcut.shortcut.keyseq.empty()
+                        ? QKeySequence{}
+                        : QKeySequence::fromString(QString::fromStdString(shortcut.shortcut.keyseq),
+                                                   QKeySequence::PortableText);
+        hk.context = static_cast<Qt::ShortcutContext>(shortcut.shortcut.context);
+        hk.controller_keyseq = shortcut.shortcut.controller_keyseq;
+        hk.repeat = shortcut.shortcut.repeat;
         if (hk.shortcut) {
             hk.shortcut->disconnect();
             hk.shortcut->setKey(hk.keyseq);
+            hk.shortcut->setContext(hk.context);
+            hk.shortcut->setAutoRepeat(hk.repeat);
         }
         if (hk.controller_shortcut) {
             hk.controller_shortcut->disconnect();
             hk.controller_shortcut->SetKey(hk.controller_keyseq);
         }
-        hk.repeat = shortcut.shortcut.repeat;
     }
 }
 
@@ -205,12 +206,15 @@ void ControllerShortcut::ControllerUpdateEvent(Core::HID::ControllerTriggerType 
     const u64 player_home_buttons =
         emulated_controller->GetHomeButtons().raw & button_sequence.home.raw;
 
-    if (player_npad_buttons == button_sequence.npad.raw &&
-        player_capture_buttons == button_sequence.capture.raw &&
-        player_home_buttons == button_sequence.home.raw && !active) {
-        // Force user to press the home or capture button again
-        active = true;
-        emit Activated();
+    const bool matched = player_npad_buttons == button_sequence.npad.raw &&
+                         player_capture_buttons == button_sequence.capture.raw &&
+                         player_home_buttons == button_sequence.home.raw;
+    if (matched) {
+        if (!active) {
+            // Force user to release the combo before firing again
+            active = true;
+            emit Activated();
+        }
         return;
     }
     active = false;
