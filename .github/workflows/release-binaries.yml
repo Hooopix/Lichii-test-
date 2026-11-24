@@ -68,7 +68,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          built=$(gh run list -R "$GITHUB_REPOSITORY" -w release-binaries.yml -b nx2 -s success -L 1 \
+          built=$(gh run list -R "$GITHUB_REPOSITORY" -w release-binaries.yml -b hoochii-nx2 -s success -L 1 \
             --json headSha --jq '.[0].headSha // ""')
           echo "build=$([ "$built" = "$GITHUB_SHA" ] && echo false || echo true)" >> "$GITHUB_OUTPUT"
 

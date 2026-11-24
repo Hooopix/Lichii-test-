@@ -2,9 +2,9 @@ name: build-check
 
 on:
   pull_request:
-    branches: [nx2, 'capy/nce-*']
+    branches: [hoochii-nx2, nx2, 'capy/nce-*']
   push:
-    branches: [nx2]
+    branches: [hoochii-nx2, nx2]
   workflow_dispatch:
 
 permissions:
