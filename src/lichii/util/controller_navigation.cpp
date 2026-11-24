@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <QWidget>
+
 #include "common/settings_input.h"
 #include "hid_core/frontend/emulated_controller.h"
 #include "hid_core/hid_core.h"
 #include "lichii/util/controller_navigation.h"
 
-ControllerNavigation::ControllerNavigation(Core::HID::HIDCore& hid_core, QWidget* parent) {
+ControllerNavigation::ControllerNavigation(Core::HID::HIDCore& hid_core, QWidget* parent)
+    : QObject(parent) {
     player1_controller = hid_core.GetEmulatedController(Core::HID::NpadIdType::Player1);
     handheld_controller = hid_core.GetEmulatedController(Core::HID::NpadIdType::Handheld);
     Core::HID::ControllerUpdateCallback engine_callback{
@@ -92,7 +95,7 @@ void ControllerNavigation::ControllerUpdateButton() {
 void ControllerNavigation::ControllerUpdateStick() {
     const auto controller_type = player1_controller->GetNpadStyleIndex();
     const auto& player1_sticks = player1_controller->GetSticksValues();
-    const auto& handheld_sticks = player1_controller->GetSticksValues();
+    const auto& handheld_sticks = handheld_controller->GetSticksValues();
     bool update = false;
 
     for (std::size_t i = 0; i < player1_sticks.size(); ++i) {

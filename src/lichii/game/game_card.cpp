@@ -36,7 +36,8 @@ void GameCard::paint(QPainter* painter, const QStyleOptionViewItem& option,
         borderColor = palette.highlight().color().lighter(150);
         textColor = palette.highlightedText().color();
     } else if (option.state & QStyle::State_MouseOver) {
-        backgroundColor = backgroundColor.lighter(120);
+        backgroundColor = backgroundColor.lightness() > 128 ? backgroundColor.darker(108)
+                                                            : backgroundColor.lighter(120);
     }
 
     painter->setBrush(backgroundColor);

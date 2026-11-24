@@ -179,15 +179,33 @@ int ReadDirectoryCount(QTemporaryFile& file) {
     constexpr int footer_size = 22;
     constexpr int header_size = 46;
     constexpr qint64 max_directory_bytes = 4 * 1024 * 1024;
-    const qint64 end = file.size() - footer_size;
-    if (end < 0 || !file.seek(0) || file.read(4) != QByteArrayLiteral("PK\x03\x04") ||
-        !file.seek(end)) {
+    const qint64 file_size = file.size();
+    if (file_size < footer_size || !file.seek(0) ||
+        file.read(4) != QByteArrayLiteral("PK\x03\x04")) {
+        return 0;
+    }
+    const qint64 scan_len = std::min<qint64>(file_size, footer_size + 65535);
+    const qint64 scan_start = file_size - scan_len;
+    if (!file.seek(scan_start)) {
+        return 0;
+    }
+    const QByteArray tail = file.read(scan_len);
+    qint64 end = -1;
+    for (qsizetype i = tail.size() - footer_size; i >= 0; --i) {
+        if (tail[i] == 'P' && tail[i + 1] == 'K' && tail[i + 2] == 5 && tail[i + 3] == 6) {
+            const quint16 comment_len = qFromLittleEndian<quint16>(tail.constData() + i + 20);
+            if (i + footer_size + comment_len == tail.size()) {
+                end = scan_start + i;
+                break;
+            }
+        }
+    }
+    if (end < 0 || !file.seek(end)) {
         return 0;
     }
     const QByteArray footer = file.read(footer_size);
     if (footer.size() != footer_size || !footer.startsWith("PK\x05\x06") ||
-        qFromLittleEndian<quint32>(footer.constData() + 4) != 0 ||
-        qFromLittleEndian<quint16>(footer.constData() + 20) != 0) {
+        qFromLittleEndian<quint32>(footer.constData() + 4) != 0) {
         return 0;
     }
     const int count = qFromLittleEndian<quint16>(footer.constData() + 10);

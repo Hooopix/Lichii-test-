@@ -22,6 +22,7 @@ $SUDO DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends 
     autoconf \
     ccache \
     clang-20 \
+    clang-format-20 \
     g++-13 \
     gcc-13 \
     git \
@@ -73,8 +74,8 @@ $SUDO DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends 
     python3-venv \
     python3-zstandard \
     qt6-base-private-dev \
-    qt6-charts-dev \
     qt6-tools-dev \
+    shellcheck \
     spirv-headers \
     spirv-tools \
     vulkan-validationlayers \
@@ -117,7 +118,7 @@ if [ ! -f "$QT_PREFIX/lib/cmake/Qt6/Qt6Config.cmake" ]; then
     (
         cd /tmp
         "$PIPX_BIN_DIR/aqt" install-qt "$QT_HOST" desktop 6.8.3 "$QT_ARCH" \
-            -m qtcharts qtimageformats -O "$HOME/Qt"
+            -m qtimageformats -O "$HOME/Qt"
         rm -f /tmp/aqtinstall.log
     )
 fi

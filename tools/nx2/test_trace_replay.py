@@ -10,6 +10,7 @@ import tempfile
 import unittest
 import zlib
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import trace_replay  # noqa: E402
@@ -88,6 +89,67 @@ class TraceReplayTest(unittest.TestCase):
             self.assertFalse(rows[0]["equal"])
             self.assertEqual(rows[0]["difference"]["max"], 6)
             self.assertTrue(trace_replay.compare_runs(base, frames, base, frames)[0]["equal"])
+
+    def test_write_html_escapes_and_rejects_unsafe_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            out = Path(directory)
+            rows = [{
+                "index": "0<script>alert(1)</script>",
+                "base": {"file": "frame '0'.png", "hash": "<b>h</b>"},
+                "head": None,
+                "equal": False,
+                "difference": {"max": 1},
+            }]
+            trace_replay.write_html(out, rows, "<base>", "<head>")
+            page = (out / "index.html").read_text(encoding="utf-8")
+            self.assertNotIn("<script>", page)
+            self.assertNotIn("<b>", page)
+            self.assertIn("&lt;script&gt;", page)
+            self.assertIn("&lt;b&gt;h&lt;/b&gt;", page)
+            self.assertIn("src='base/frame%20%270%27.png'", page)
+
+            for bad in ("../evil.png", "/abs/evil.png", "C:/evil.png", "sub/../../evil.png"):
+                with self.subTest(bad=bad):
+                    bad_rows = [{"index": 0, "base": {"file": bad, "hash": "a"}, "head": None,
+                                 "equal": False}]
+                    with self.assertRaises(ValueError):
+                        trace_replay.write_html(out, bad_rows, "base", "head")
+
+    def test_passthrough_flags_forwarded_to_replay_and_compare(self):
+        with tempfile.TemporaryDirectory() as directory:
+            out = Path(directory)
+            calls = []
+
+            def fake_replay(cli, trace, out_dir, extra=(), environment=None):
+                Path(out_dir).mkdir(parents=True, exist_ok=True)
+                calls.append((cli, trace, Path(out_dir), list(extra)))
+                return {"frames": [{"index": 0, "file": "frame-0000.png", "hash": "aaaa", "ms": 1.0}]}
+
+            with patch.object(trace_replay, "replay", side_effect=fake_replay):
+                rc = trace_replay.main([
+                    "replay", "--cli", "hoochii-cli", "t.lxtrace", "--out", str(out / "r"),
+                    "--frames", "10", "--device", "1", "--gpu-accuracy", "low",
+                    "--render-thread", "off",
+                ])
+                self.assertEqual(rc, 0)
+                self.assertEqual(calls[-1][3], [
+                    "--frames", "10", "--device", "1", "--gpu-accuracy", "low",
+                    "--render-thread", "off",
+                ])
+
+                calls.clear()
+                rc = trace_replay.main([
+                    "compare", "--base", "base-cli", "--head", "head-cli", "t.lxtrace",
+                    "--out", str(out / "c"), "--frames", "5", "--device", "0",
+                    "--gpu-accuracy", "high", "--render-thread", "on",
+                ])
+                self.assertEqual(rc, 0)
+                self.assertEqual(len(calls), 2)
+                for call in calls:
+                    self.assertEqual(call[3], [
+                        "--frames", "5", "--device", "0", "--gpu-accuracy", "high",
+                        "--render-thread", "on",
+                    ])
 
 
 if __name__ == "__main__":

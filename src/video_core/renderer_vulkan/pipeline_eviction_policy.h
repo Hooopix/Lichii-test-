@@ -29,6 +29,17 @@ constexpr size_t KeptPipelinesForMemory(u64 total_memory) {
     return static_cast<size_t>(total_memory / 4 / PipelineBytes);
 }
 
+/// Built compute pipelines kept when the memory query fails.
+inline constexpr size_t DefaultKeptComputePipelines = 1024;
+
+/// Built compute pipelines kept before unused ones are evicted (a quarter of the graphics budget).
+constexpr size_t KeptComputePipelinesForMemory(u64 total_memory) {
+    if (total_memory == 0) {
+        return DefaultKeptComputePipelines;
+    }
+    return std::max<size_t>(KeptPipelinesForMemory(total_memory) / 4, 1);
+}
+
 /// Without a kept limit (`kept` 0, Android), prebuilt pipelines no draw has used stay up to this
 /// budget (~0.9 GB of driver memory): evicting them throws the prebuild away (OoT: 1174 of 1346
 /// evicted on the title screen, 684 rebuilt in 10 s on entering the field).

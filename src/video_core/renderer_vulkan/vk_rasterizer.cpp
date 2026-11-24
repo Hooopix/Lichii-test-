@@ -7016,6 +7016,7 @@ void RasterizerVulkan::UpdateVertexInput(Tegra::Engines::Maxwell3D::Regs& regs) 
         vertex_input_recorded = true;
     }
 
+    buffer_cache_runtime.Arena().InvalidateVertexBindings();
     RecordDynamic([input = std::move(state)](vk::CommandBuffer cmdbuf) {
         cmdbuf.SetVertexInputEXT(input->bindings, input->attributes);
     });

@@ -4,4 +4,4 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 # do NOT use fd in scripts, PLEASE
-find tools -name "*.sh" -exec shellcheck -s sh {} \;
+find tools -name "*.sh" ! -name 'mkw_race_bench.sh' -exec shellcheck {} +

@@ -199,6 +199,24 @@ private:
     /// Builds the current key's pipeline again from what an evicted one kept, without translating
     std::unique_ptr<GraphicsPipeline> RebuildGraphicsPipeline(KeptGraphicsStages kept);
 
+    /// What an evicted compute pipeline needs to be built again without re-translating
+    struct KeptComputeStage {
+        std::vector<u8> spirv; ///< zstd
+        Shader::Info info;
+        std::vector<std::pair<u32, u32>> null_pointer_slots;
+        std::vector<u64> mapped_pointers;
+        u32 rebuilds{};
+
+        [[nodiscard]] u64 Bytes() const noexcept {
+            return spirv.size() + sizeof(Shader::Info) +
+                   null_pointer_slots.size() * sizeof(std::pair<u32, u32>) +
+                   mapped_pointers.size() * sizeof(u64);
+        }
+    };
+
+    ComputePipelineCacheEntry RebuildComputePipeline(const ComputePipelineCacheKey& key,
+                                                     KeptComputeStage kept);
+
     /// Logs a kept pointer slot (an index of keep_pointers) that this translation would otherwise
     /// have classified as no pointer: null, unmapped, or out of range right now.
     void WarnKeptPointer(size_t program, u64 slot) const;
@@ -338,7 +356,7 @@ private:
     u64 graphics_lookups{};
     bool last_lookup_kept{};
 
-    /// Destroys graphics pipelines unused for a while, once the GPU is done with them.
+    /// Destroys graphics and compute pipelines unused for a while, once the GPU is done with them.
     void EvictUnusedPipelines();
     u64 frame_count{};
     /// Wait budget of native draws for unbuilt pipelines left in this frame, in microseconds
@@ -351,12 +369,14 @@ private:
     VideoCommon::EvictedPointerSlots evicted_pointer_slots;
     /// The SPIR-V and stage infos of evicted pipelines, which build them again when used again
     VideoCommon::BoundedStore<GraphicsPipelineCacheKey, KeptGraphicsStages> kept_stages{0};
-    u64 rebuilt_from_kept{};  ///< Since the last eviction
-    u64 translated_again{};   ///< Evicted pipelines translated again since the last eviction
+    VideoCommon::BoundedStore<ComputePipelineCacheKey, KeptComputeStage> kept_compute_stages{0};
+    u64 rebuilt_from_kept{};         ///< Since the last eviction
+    u64 translated_again{};          ///< Evicted pipelines translated again since the last eviction
+    u64 rebuilt_compute_from_kept{}; ///< Evicted compute pipelines rebuilt from kept SPIR-V
 
     ::Common::unordered_map<ComputePipelineCacheKey, ComputePipelineCacheEntry> compute_cache;
-    /// Replaced compute pipelines, destroyed once the GPU and their queued build are done with
-    /// them (tick, pipeline)
+    /// Replaced or evicted compute pipelines, destroyed once the GPU and their queued build are
+    /// done with them (tick, pipeline)
     std::deque<std::pair<u64, std::unique_ptr<ComputePipeline>>> retired_compute_pipelines;
     ::Common::unordered_map<GraphicsPipelineCacheKey, std::unique_ptr<GraphicsPipeline>> graphics_cache;
 

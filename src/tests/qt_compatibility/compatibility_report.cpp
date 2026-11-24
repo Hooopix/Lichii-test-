@@ -25,6 +25,7 @@
 #include <QTcpSocket>
 #include <QTest>
 #include <QTextCursor>
+#include <QTimer>
 #include <QTranslator>
 #include <QUrlQuery>
 
@@ -121,6 +122,7 @@ private slots:
     void dialogTranslationContext();
     void machinePrefillsRemainEditable();
     void enabledAddonPrefills();
+    void cooldownTimerIdleAndReturnKeySearch();
 };
 
 Session DialogTest::Seed() {
@@ -688,6 +690,34 @@ void DialogTest::enabledAddonPrefills() {
     QVERIFY(!dialog.public_consent->isChecked());
     QVERIFY(!dialog.safe_files_consent->isChecked());
     QCOMPARE(network.requests.size(), 0);
+}
+
+void DialogTest::cooldownTimerIdleAndReturnKeySearch() {
+    FakeNetwork network;
+    Dialog dialog(Seed(), &network, nullptr);
+    QVERIFY(dialog.cooldown != nullptr);
+    QVERIFY(!dialog.cooldown->isActive());
+
+    QTest::keyClick(dialog.query, Qt::Key_Return);
+    QCOMPARE(network.requests.size(), 1);
+    network.requests.last().reply->Complete(200, Catalog());
+    QCOMPARE(dialog.games->count(), 1);
+    QVERIFY(!dialog.cooldown->isActive());
+
+    dialog.confirm->click();
+    dialog.fields[QStringLiteral("summary")]->setText(QStringLiteral("Rate limit test"));
+    dialog.paragraphs[QStringLiteral("progress")]->setPlainText(QStringLiteral("Reached menu"));
+    dialog.paragraphs[QStringLiteral("details")]->setPlainText(QStringLiteral("Synthetic details"));
+    dialog.outcome->setCurrentIndex(2);
+    dialog.public_consent->setChecked(true);
+    dialog.safe_files_consent->setChecked(true);
+    dialog.Submit();
+    network.requests.last().reply->Complete(429, "{}", "1");
+    QVERIFY(dialog.cooldown->isActive());
+
+    QTest::qWait(1100);
+    dialog.Refresh();
+    QVERIFY(!dialog.cooldown->isActive());
 }
 
 } // namespace CompatibilityReporting

@@ -150,6 +150,11 @@ ConfigurePostProcessing::ConfigurePostProcessing(QWidget* parent) : QDialog(pare
     scroll->setWidget(slots_container);
     root->addWidget(scroll, 1);
 
+    VideoCore::ReloadFxCatalog();
+    VideoCore::ReloadFxPresetCatalog();
+    VideoCore::FxChain::Instance().LoadFromSettings();
+    VideoCore::FxChain::Instance().DropUnknownEntries();
+
     auto* actions = new QHBoxLayout();
 
     auto* add_button = new QPushButton(tr("Add Effect"), this);
@@ -179,10 +184,6 @@ ConfigurePostProcessing::ConfigurePostProcessing(QWidget* parent) : QDialog(pare
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::close);
     root->addWidget(buttons);
 
-    VideoCore::ReloadFxCatalog();
-    VideoCore::ReloadFxPresetCatalog();
-    VideoCore::FxChain::Instance().LoadFromSettings();
-    VideoCore::FxChain::Instance().DropUnknownEntries();
     PopulatePresetCombo();
     RebuildRows();
     RefreshPresetStatus();

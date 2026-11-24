@@ -29,6 +29,14 @@ void ConfigureDebugTab::SetCurrentIndex(int index) {
     ui->tabWidget->setCurrentIndex(index);
 }
 
+ConfigureDebug* ConfigureDebugTab::DebugSubTab() const {
+    return debug_tab.get();
+}
+
+ConfigureCpuDebug* ConfigureDebugTab::CpuDebugSubTab() const {
+    return cpu_debug_tab.get();
+}
+
 void ConfigureDebugTab::changeEvent(QEvent* event) {
     if (event->type() == QEvent::LanguageChange) {
         RetranslateUI();

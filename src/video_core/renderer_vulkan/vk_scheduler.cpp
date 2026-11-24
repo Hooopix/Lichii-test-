@@ -105,6 +105,7 @@ void Scheduler::CommandChunk::ExecuteAll(vk::CommandBuffer cmdbuf,
         command = next;
     }
     submit = false;
+    needs_upload_buffer = false;
     command_offset = 0;
     first = nullptr;
     last = nullptr;
@@ -657,6 +658,9 @@ void Scheduler::WorkerThread(std::stop_token stop_token) {
             // Perform the work, tracking whether the chunk was a submission
             // before executing.
             const bool has_submit = work->HasSubmit();
+            if (work->NeedsUploadBuffer() && *current_upload_cmdbuf == VK_NULL_HANDLE) {
+                AllocateWorkerUploadCommandBuffer();
+            }
             work->ExecuteAll(current_cmdbuf, current_upload_cmdbuf);
 
             // If the chunk was a submission, reallocate the command buffer.
@@ -683,6 +687,13 @@ void Scheduler::AllocateWorkerCommandBuffer() {
         .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
         .pInheritanceInfo = nullptr,
     });
+    current_upload_cmdbuf = {};
+    if (trace_query_pool && !trace_gpu_failed && (trace_gpu_pending || trace_gpu_sampling)) {
+        TraceGpuSubmission();
+    }
+}
+
+void Scheduler::AllocateWorkerUploadCommandBuffer() {
     current_upload_cmdbuf = vk::CommandBuffer(command_pool->Commit(), device.GetDispatchLoader());
     current_upload_cmdbuf.Begin({
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -690,9 +701,6 @@ void Scheduler::AllocateWorkerCommandBuffer() {
         .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
         .pInheritanceInfo = nullptr,
     });
-    if (trace_query_pool && !trace_gpu_failed && (trace_gpu_pending || trace_gpu_sampling)) {
-        TraceGpuSubmission();
-    }
 }
 
 void Scheduler::TraceShader(u64 hash, u32 stage) {
@@ -1151,22 +1159,22 @@ void Scheduler::TraceGpuSubmission() {
     if (!trace_gpu_sampling || trace_gpu_count == TraceMaxSubmissions) {
         return;
     }
-    current_upload_cmdbuf.ResetQueryPool(*trace_query_pool, trace_gpu_count * 2, 2);
+    current_cmdbuf.ResetQueryPool(*trace_query_pool, trace_gpu_count * 2, 2);
     if (trace_gpu_count == 0 && trace_work_pool) {
         // Draws are timed inside render passes, where queries cannot be reset.
-        current_upload_cmdbuf.ResetQueryPool(*trace_work_pool, 0, TraceMaxWork * 2);
+        current_cmdbuf.ResetQueryPool(*trace_work_pool, 0, TraceMaxWork * 2);
     }
     if (trace_gpu_count == 0 && trace_site_pool) {
-        current_upload_cmdbuf.ResetQueryPool(*trace_site_pool, 0, TraceMaxSites + 1);
+        current_cmdbuf.ResetQueryPool(*trace_site_pool, 0, TraceMaxSites + 1);
         trace_site_count = 0;
     }
     if (trace_gpu_count == 0 && trace_pass_pool) {
-        current_upload_cmdbuf.ResetQueryPool(*trace_pass_pool, 0, TraceMaxPasses);
+        current_cmdbuf.ResetQueryPool(*trace_pass_pool, 0, TraceMaxPasses);
         trace_pass_count = 0;
         trace_pass = {};
     }
-    current_upload_cmdbuf.WriteTimestamp(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, *trace_query_pool,
-                                        trace_gpu_count * 2);
+    current_cmdbuf.WriteTimestamp(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, *trace_query_pool,
+                                  trace_gpu_count * 2);
     trace_gpu_recording = true;
 }
 
@@ -1183,16 +1191,19 @@ u64 Scheduler::SubmitExecution(VkSemaphore signal_semaphore, VkSemaphore wait_se
     InvalidateState();
 
     const u64 signal_value = master_semaphore->NextTick();
-    RecordWithUploadBuffer([signal_semaphore, wait_semaphore, signal_value,
-                            this](vk::CommandBuffer cmdbuf, vk::CommandBuffer upload_cmdbuf) {
-        static constexpr VkMemoryBarrier WRITE_BARRIER{
-            .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
-            .pNext = nullptr,
-            .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-            .dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
-        };
-        upload_cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, WRITE_BARRIER);
-        upload_cmdbuf.End();
+    Record([signal_semaphore, wait_semaphore, signal_value, this](vk::CommandBuffer cmdbuf) {
+        if (*current_upload_cmdbuf != VK_NULL_HANDLE) {
+            static constexpr VkMemoryBarrier WRITE_BARRIER{
+                .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+                .pNext = nullptr,
+                .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+                .dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
+            };
+            current_upload_cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                                  VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0,
+                                                  WRITE_BARRIER);
+            current_upload_cmdbuf.End();
+        }
         if (trace_gpu_recording) {
             cmdbuf.WriteTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, *trace_query_pool,
                                  trace_gpu_count * 2 + 1);
@@ -1220,7 +1231,7 @@ u64 Scheduler::SubmitExecution(VkSemaphore signal_semaphore, VkSemaphore wait_se
 
         std::scoped_lock lock{submit_mutex};
         switch (const VkResult result = master_semaphore->SubmitQueue(
-                    cmdbuf, upload_cmdbuf, signal_semaphore, wait_semaphore, signal_value)) {
+                    cmdbuf, current_upload_cmdbuf, signal_semaphore, wait_semaphore, signal_value)) {
         case VK_SUCCESS:
             // Log successful queue submission
             if (GPU::Logging::IsActive() &&

@@ -77,6 +77,7 @@ public:
 #ifdef EGLANTINE_STREAMLINE
     [[nodiscard]] VideoCore::DlssStatus GetDlssStatus() const override;
 #endif
+    [[nodiscard]] VideoCore::Fsr4Status GetFsr4Status() const override;
 
     void RequestGpuBusySample() override {
         scheduler.RequestGpuBusySample();

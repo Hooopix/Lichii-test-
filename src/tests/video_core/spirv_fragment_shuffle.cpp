@@ -173,3 +173,45 @@ TEST_CASE("Fragment workaround leaves other stages on native shuffles",
         }
     }
 }
+
+TEST_CASE("ShuffleButterfly and QuadSwap honor UseShuffleFallback",
+          "[video_core][spirv][fragment_shuffle]") {
+    for (const bool fallback : {false, true}) {
+        ObjectPool<IR::Inst> pool;
+        IR::Block block{pool};
+        IR::Program program;
+        program.stage = Stage::Fragment;
+        program.workgroup_size = {64, 1, 1};
+        program.blocks = {&block};
+        program.post_order_blocks = {&block};
+        program.syntax_list = {{{.block = &block}, IR::AbstractSyntaxNode::Type::Block},
+                               {{}, IR::AbstractSyntaxNode::Type::Return}};
+        program.info.uses_subgroup_invocation_id = true;
+        program.info.uses_subgroup_shuffles = true;
+        program.info.uses_quad_shuffles = true;
+        IR::IREmitter ir{block};
+        const auto lane = ir.LaneId();
+        const auto value = ir.IAdd(lane, ir.Imm32(50));
+        (void)ir.ShuffleButterfly(value, ir.Imm32(1), ir.Imm32(31), ir.Imm32(0));
+        (void)ir.QuadSwap(value, ir.Imm32(0));
+        Profile profile;
+        profile.supported_spirv = 0x00010500;
+        profile.support_vote = true;
+        profile.support_shuffle_relative = true;
+        profile.support_quad_shuffles = false;
+        profile.max_subgroup_size = 32;
+        profile.has_broken_spirv_fragment_shuffle = fallback;
+        const auto code = Backend::SPIRV::EmitSPIRV(profile, program);
+        size_t broadcasts{}, shuffle_xors{};
+        for (size_t offset = 5; offset < code.size();) {
+            const u32 size = code[offset] >> 16;
+            REQUIRE(size != 0);
+            const auto op = static_cast<spv::Op>(code[offset] & 0xffffU);
+            broadcasts += op == spv::Op::OpGroupNonUniformBroadcast;
+            shuffle_xors += op == spv::Op::OpGroupNonUniformShuffleXor;
+            offset += size;
+        }
+        CHECK(shuffle_xors == (fallback ? 0U : 2U));
+        CHECK(broadcasts == (fallback ? 64U : 0U));
+    }
+}

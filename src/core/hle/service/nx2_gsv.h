@@ -2055,6 +2055,11 @@ public:
         // A service fiber can be discarded during shutdown without unwinding its stack.
         // Remove or join its callback before closing the session-owned event.
         m_frame_wait_action.reset();
+        auto& syncpoints = system.Host1x().GetSyncpointManager();
+        for (const auto& pending : m_fence_trace.pending) {
+            syncpoints.DeregisterGuestAction(pending->fence_id, pending->action);
+        }
+        m_fence_trace.pending.clear();
         m_context.CloseEvent(m_frame_wait_event);
         // The vsync callback may be running on the HostTiming thread: empty its event list under
         // its lock first (it holds the state, not this session), then close the events.
@@ -2692,27 +2697,35 @@ private:
                     bool done{};
                 };
                 auto wake = std::make_shared<Wake>();
-                syncpoints.RegisterGuestAction(fence_id, fence_value, [wake] {
+                const auto action = syncpoints.RegisterGuestAction(fence_id, fence_value, [wake] {
                     {
                         std::scoped_lock lk{wake->mutex};
                         wake->done = true;
                     }
                     wake->cv.notify_all();
                 });
-                std::unique_lock lk{wake->mutex};
-                // Title 1's channels resume and suspend again while they wait on this thread, so any
-                // suspension counts, not only an unbroken one.
-                bool gpu_waited = false;
-                while (!wake->done && system.IsPoweredOn() &&
-                       std::chrono::steady_clock::now() < deadline) {
-                    if (unless_gpu_waits) {
-                        gpu_waited |= system.GPU().HasSuspendedChannels();
-                        if (gpu_waited &&
-                            std::chrono::steady_clock::now() - start > std::chrono::milliseconds{3}) {
-                            return false;
+                bool gave_up = false;
+                {
+                    std::unique_lock lk{wake->mutex};
+                    // Title 1's channels resume and suspend again while they wait on this thread,
+                    // so any suspension counts, not only an unbroken one.
+                    bool gpu_waited = false;
+                    while (!wake->done && system.IsPoweredOn() &&
+                           std::chrono::steady_clock::now() < deadline) {
+                        if (unless_gpu_waits) {
+                            gpu_waited |= system.GPU().HasSuspendedChannels();
+                            if (gpu_waited && std::chrono::steady_clock::now() - start >
+                                                  std::chrono::milliseconds{3}) {
+                                gave_up = true;
+                                break;
+                            }
                         }
+                        wake->cv.wait_for(lk, std::chrono::milliseconds{unless_gpu_waits ? 1 : 50});
                     }
-                    wake->cv.wait_for(lk, std::chrono::milliseconds{unless_gpu_waits ? 1 : 50});
+                }
+                syncpoints.DeregisterGuestAction(fence_id, action);
+                if (gave_up) {
+                    return false;
                 }
             }
         }

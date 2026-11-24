@@ -232,35 +232,18 @@ public:
         requires std::is_invocable_v<T, vk::CommandBuffer, vk::CommandBuffer>
     void RecordWithUploadBuffer(T&& command,
                                 std::source_location location = std::source_location::current()) {
-        JoinRecorders();
-        if (VideoCommon::GpuSplit::check_owner) [[unlikely]] {
-            VideoCommon::GpuSplit::CheckOwner("Scheduler::Record");
-            BufferArena::CheckRecord("Scheduler::Record", location);
-        }
-        if (uploads_pending) {
-            // Pending uploads precede every other recorded command, including upload-buffer work.
-            FlushUploads();
-        }
-        ++record_serial;
-        if (Common::DkbFrameTrace::GpuSitesEnabled()) {
-            RecordSiteMarker(location);
-        }
-        if (chunk->Record(command)) {
-            return;
-        }
-        DispatchWork();
-        (void)chunk->Record(command);
+        RecordImpl(std::forward<T>(command), true, location);
     }
 
     /// Send work to a separate thread; `location` labels it in EDEN_DKB_GPU_SITES's gpu_site log.
     template <typename T>
         requires std::is_invocable_v<T, vk::CommandBuffer>
     void Record(T&& c, std::source_location location = std::source_location::current()) {
-        this->RecordWithUploadBuffer(
+        RecordImpl(
             [command = std::move(c)](vk::CommandBuffer cmdbuf, vk::CommandBuffer) {
                 command(cmdbuf);
             },
-            location);
+            false, location);
     }
 
     /// Whether anything was recorded since the last Flush or Finish, or waits to be: batched
@@ -448,6 +431,10 @@ private:
             submit = true;
         }
 
+        void MarkNeedsUploadBuffer() {
+            needs_upload_buffer = true;
+        }
+
         bool Empty() const {
             return command_offset == 0;
         }
@@ -456,14 +443,44 @@ private:
             return submit;
         }
 
+        bool NeedsUploadBuffer() const {
+            return needs_upload_buffer;
+        }
+
     private:
         Command* first = nullptr;
         Command* last = nullptr;
 
         size_t command_offset = 0;
         bool submit = false;
+        bool needs_upload_buffer = false;
         alignas(std::max_align_t) std::array<u8, 0x8000> data{};
     };
+
+    template <typename T>
+        requires std::is_invocable_v<T, vk::CommandBuffer, vk::CommandBuffer>
+    void RecordImpl(T&& command, bool needs_upload_buffer, std::source_location location) {
+        JoinRecorders();
+        if (VideoCommon::GpuSplit::check_owner) [[unlikely]] {
+            VideoCommon::GpuSplit::CheckOwner("Scheduler::Record");
+            BufferArena::CheckRecord("Scheduler::Record", location);
+        }
+        if (uploads_pending) {
+            // Pending uploads precede every other recorded command, including upload-buffer work.
+            FlushUploads();
+        }
+        ++record_serial;
+        if (Common::DkbFrameTrace::GpuSitesEnabled()) {
+            RecordSiteMarker(location);
+        }
+        if (!chunk->Record(command)) {
+            DispatchWork();
+            (void)chunk->Record(command);
+        }
+        if (needs_upload_buffer) {
+            chunk->MarkNeedsUploadBuffer();
+        }
+    }
 
     struct State {
         VkRenderPass renderpass{};
@@ -496,6 +513,7 @@ private:
     void WorkerThread(std::stop_token stop_token);
 
     void AllocateWorkerCommandBuffer();
+    void AllocateWorkerUploadCommandBuffer();
 
     void TraceGpuSubmission();
     void ReportWorkTimes();

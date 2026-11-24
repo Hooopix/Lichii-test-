@@ -264,6 +264,12 @@ TOOLS = [
         },
     },
     {
+        "name": "speed_limit",
+        "description": "Lifts (on: false) or restores (on: true) the speed limit live. "
+                       "Without 'on', reports the current state. Returns the previous and current state.",
+        "inputSchema": {"type": "object", "properties": {"on": {"type": "boolean"}}},
+    },
+    {
         "name": "host_timing",
         "description": "Turns the per-second 'HostTiming wait' log line (EDEN_NX2_HOSTTIMING_STATS) "
                        "on or off; read it with log_tail. Returns the previous and current state.",
@@ -305,6 +311,14 @@ TOOLS = [
 ]
 
 TOOL_NAMES = {tool["name"] for tool in TOOLS}
+
+
+def resolve_debug_server():
+    for name in ("HOOCHII_DEBUG_SERVER", "LICHII_DEBUG_SERVER", "EDEN_NX2_DEBUG_SERVER"):
+        value = os.environ.get(name)
+        if value:
+            return value
+    return DEFAULT_SERVER
 
 
 class EmulatorError(Exception):
@@ -388,12 +402,12 @@ class Adapter:
         self.emulator = emulator
         self.captures = set()
 
-    def run(self, name, arguments):
+    def run(self, name, arguments, allow_existing_capture=False):
         """Runs one tool; returns its result and the PNG it produced, if any."""
         if name not in TOOL_NAMES:
             raise EmulatorError(f"unknown tool {name}")
         if name == "capture_image":
-            return self.capture_image(arguments)
+            return self.capture_image(arguments, allow_existing=allow_existing_capture)
         params = dict(arguments)
         index = params.pop("index", False)
         timeout = max(int(params.get("timeout_s", default_timeout(name, params))), 1) + 30
@@ -433,10 +447,11 @@ class Adapter:
             return f"bundle_index.py failed: {done.stderr.strip()[-2000:]}"
         return done.stdout.strip().splitlines()[-1]
 
-    def capture_image(self, arguments):
+    def capture_image(self, arguments, allow_existing=False):
         directory = os.path.realpath(arguments["directory"])
         if directory not in self.captures:
-            raise EmulatorError("not a capture made in this session; run capture_frame first")
+            if not (allow_existing and os.path.isfile(os.path.join(directory, "manifest.jsonl"))):
+                raise EmulatorError("not a capture made in this session; run capture_frame first")
         path = os.path.realpath(os.path.join(directory, arguments["name"] + ".png"))
         if os.path.dirname(path) != directory or not os.path.isfile(path):
             raise EmulatorError(f"no image {arguments['name']}.png in {directory}")
@@ -493,7 +508,8 @@ def call_once(adapter, request_text, out, stdout):
     """--call: one request, its JSON result on stdout, its PNG (if any) saved to `out`."""
     try:
         request = json.loads(request_text)
-        result, png = adapter.run(request["method"], request.get("params") or {})
+        result, png = adapter.run(request["method"], request.get("params") or {},
+                                  allow_existing_capture=True)
     except (EmulatorError, KeyError, ValueError, TypeError, AttributeError) as error:
         message = f"missing {error} in the request" if isinstance(error, KeyError) else str(error)
         stdout.write(json.dumps({"error": message}) + "\n")
@@ -511,7 +527,7 @@ def call_once(adapter, request_text, out, stdout):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--server", default=os.environ.get("LICHII_DEBUG_SERVER", DEFAULT_SERVER),
+    parser.add_argument("--server", default=resolve_debug_server(),
                         help=f"host:port of EDEN_NX2_DEBUG_SERVER (default {DEFAULT_SERVER})")
     parser.add_argument("--call", metavar="JSON",
                         help='run one request and exit, e.g. \'{"method":"screenshot","params":{}}\'')

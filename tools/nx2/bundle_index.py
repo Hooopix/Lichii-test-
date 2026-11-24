@@ -11,7 +11,6 @@ import argparse
 import html
 import importlib.util
 import json
-import shutil
 import stat
 import sys
 import zipfile
@@ -20,6 +19,7 @@ from urllib.parse import quote
 
 FORMAT = "lichii-bug-bundle"
 MAX_ENTRIES = 20000
+MAX_MANIFEST_BYTES = 16 * 2**20
 MAX_UNPACKED = 2 * 2**30
 SHADER_LISTS = ("frame/shaders/shaders.jsonl", "shaders/shaders.jsonl")
 FILES = ("settings.txt", "system.json", "mods.json", "frame_times.json", "README.md")
@@ -43,9 +43,19 @@ def load_frame_dump_index():
 
 def read_manifest(archive):
     try:
-        data = archive.read("bundle.json")
+        info = archive.getinfo("bundle.json")
     except KeyError:
         raise BundleError('no bundle.json at the zip root, so this is not a Lichii bug bundle') from None
+    chunks = []
+    total = 0
+    with archive.open(info) as source:
+        while chunk := source.read(1 << 20):
+            total += len(chunk)
+            if total > MAX_MANIFEST_BYTES:
+                raise BundleError(
+                    f"bundle.json exceeds {MAX_MANIFEST_BYTES // (1 << 20)} MiB, so this is not a Lichii bug bundle")
+            chunks.append(chunk)
+    data = b"".join(chunks)
     try:
         manifest = json.loads(data.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -74,6 +84,7 @@ def check_members(infos):
 def unpack(archive, out):
     out.mkdir(parents=True, exist_ok=True)
     root = out.resolve()
+    total = 0
     for info in archive.infolist():
         target = (root / info.filename.replace("\\", "/")).resolve()
         if target != root and root not in target.parents:
@@ -83,7 +94,12 @@ def unpack(archive, out):
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
         with archive.open(info) as source, open(target, "wb") as sink:
-            shutil.copyfileobj(source, sink)
+            while chunk := source.read(1 << 20):
+                total += len(chunk)
+                if total > MAX_UNPACKED:
+                    raise BundleError(
+                        f"the zip unpacks to more than {MAX_UNPACKED} bytes ({total} bytes read)")
+                sink.write(chunk)
 
 
 def link(out, rel_base, path):

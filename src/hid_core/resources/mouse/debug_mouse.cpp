@@ -46,8 +46,11 @@ void DebugMouse::OnUpdate(const Core::Timing::CoreTiming& core_timing) {
         const auto& mouse_position_state = emulated_devices->GetMousePosition();
         const auto& mouse_wheel_state = emulated_devices->GetMouseWheel();
         next_state.attribute.is_connected.Assign(1);
-        next_state.x = static_cast<s32>(mouse_position_state.x * Layout::ScreenUndocked::Width);
-        next_state.y = static_cast<s32>(mouse_position_state.y * Layout::ScreenUndocked::Height);
+        const bool docked = Settings::IsDockedMode();
+        const u32 width = docked ? Layout::ScreenDocked::Width : Layout::ScreenUndocked::Width;
+        const u32 height = docked ? Layout::ScreenDocked::Height : Layout::ScreenUndocked::Height;
+        next_state.x = static_cast<s32>(mouse_position_state.x * width);
+        next_state.y = static_cast<s32>(mouse_position_state.y * height);
         next_state.delta_x = next_state.x - last_entry.x;
         next_state.delta_y = next_state.y - last_entry.y;
         next_state.delta_wheel_x = mouse_wheel_state.x - last_mouse_wheel_state.x;

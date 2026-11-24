@@ -53,6 +53,8 @@ class FakeEmulator:
             return {"error": "GPU address 0x5000 is not mapped"}
         if method in ("input", "input_sequence"):
             return {"result": {"controller": "player1", "frames": 3}}
+        if method == "speed_limit":
+            return {"result": {"previous": True, "on": request["params"].get("on", True)}}
         return {"error": f"unknown method \"{method}\""}
 
     def serve(self):
@@ -107,7 +109,7 @@ class AdapterTest(unittest.TestCase):
         self.assertEqual(names, ["status", "frame_times", "screenshot", "log_tail", "log_filter", "capture_frame",
                                  "capture_image", "capture_bundle", "reject_shaders", "sample", "read_memory",
                                  "search_memory", "read_gpu_memory", "input",
-                                 "input_sequence", "host_timing", "render_follower", "trace_record",
+                                 "input_sequence", "speed_limit", "host_timing", "render_follower", "trace_record",
                                  "trace_stop", "trace_status"])
         self.assertEqual(self.adapter.handle({"id": 3, "method": "bogus"})["error"]["code"], -32601)
 
@@ -261,6 +263,62 @@ class AdapterTest(unittest.TestCase):
                                 capture_output=True, text=True, timeout=30)
         self.assertEqual(failed.returncode, 1)
         self.assertIn("unknown method", json.loads(failed.stdout)["error"])
+
+    def test_speed_limit_is_forwarded(self):
+        result = self.call("speed_limit", {"on": False})
+        self.assertFalse(result["isError"])
+        self.assertEqual(json.loads(result["content"][0]["text"]), {"previous": True, "on": False})
+        self.assertEqual(self.fake.requests[-1]["params"], {"on": False})
+        report = self.call("speed_limit")
+        self.assertFalse(report["isError"])
+        self.assertEqual(self.fake.requests[-1]["params"], {})
+
+    def test_call_once_reads_existing_capture_image_with_manifest(self):
+        out = os.path.join(self.temp.name, "present.png")
+        request = json.dumps({"method": "capture_image",
+                              "params": {"directory": self.capture_dir, "name": "0001_present"}})
+        stdout = io.StringIO()
+        self.assertEqual(debug_mcp.call_once(self.adapter, request, out, stdout), 1)
+        self.assertIn("not a capture made in this session", json.loads(stdout.getvalue())["error"])
+
+        with open(os.path.join(self.capture_dir, "manifest.jsonl"), "w", encoding="utf-8") as file:
+            file.write('{"kind":"frame","frame":1}\n')
+        stdout = io.StringIO()
+        self.assertEqual(debug_mcp.call_once(self.adapter, request, out, stdout), 0)
+        with open(out, "rb") as file:
+            self.assertEqual(file.read(), b"\x89PNG present")
+
+        # MCP stdio mode stays restricted to captures made in the current session.
+        self.assertTrue(self.call("capture_image", {"directory": self.capture_dir,
+                                                    "name": "0001_present"})["isError"])
+
+        with open(os.path.join(self.temp.name, "escape.png"), "wb") as file:
+            file.write(b"\x89PNG escape")
+        escape = json.dumps({"method": "capture_image",
+                             "params": {"directory": self.capture_dir, "name": "../escape"}})
+        stdout = io.StringIO()
+        self.assertEqual(debug_mcp.call_once(self.adapter, escape, out, stdout), 1)
+        self.assertIn("no image", json.loads(stdout.getvalue())["error"])
+
+    def test_resolve_debug_server_precedence(self):
+        saved = {k: os.environ.get(k) for k in ("HOOCHII_DEBUG_SERVER", "LICHII_DEBUG_SERVER",
+                                                "EDEN_NX2_DEBUG_SERVER")}
+        try:
+            for k in saved:
+                os.environ.pop(k, None)
+            self.assertEqual(debug_mcp.resolve_debug_server(), debug_mcp.DEFAULT_SERVER)
+            os.environ["EDEN_NX2_DEBUG_SERVER"] = "127.0.0.1:7003"
+            self.assertEqual(debug_mcp.resolve_debug_server(), "127.0.0.1:7003")
+            os.environ["LICHII_DEBUG_SERVER"] = "127.0.0.1:7002"
+            self.assertEqual(debug_mcp.resolve_debug_server(), "127.0.0.1:7002")
+            os.environ["HOOCHII_DEBUG_SERVER"] = "127.0.0.1:7001"
+            self.assertEqual(debug_mcp.resolve_debug_server(), "127.0.0.1:7001")
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
 
 
 if __name__ == "__main__":

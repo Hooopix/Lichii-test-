@@ -477,11 +477,8 @@ void CreateShortcut(const std::string& game_path, const u64 program_id,
     }
 
     const std::string illegal_chars = "<>:\"/\\|?*.";
-    for (auto it = game_title.rbegin(); it != game_title.rend(); ++it) {
-        if (illegal_chars.find(*it) != std::string::npos) {
-            game_title.erase(it.base() - 1);
-        }
-    }
+    std::erase_if(game_title,
+                  [&](char c) { return illegal_chars.find(c) != std::string::npos; });
 
     const QString qgame_title = QString::fromStdString(game_title);
 

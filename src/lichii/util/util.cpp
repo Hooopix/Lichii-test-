@@ -28,7 +28,8 @@ QFont GetMonospaceFont() {
 
 QIcon MenuIcon(const char* name) {
     QIcon icon;
-    if (UISettings::values.theme != "lichii" && UISettings::values.theme != "hoochii") {
+    const auto theme = UISettings::EffectiveTheme();
+    if (theme != "lichii" && theme != "hoochii") {
         return icon;
     }
     icon.addFile(QStringLiteral(":/lichii/icons/menu_%1.png").arg(QLatin1String(name)));

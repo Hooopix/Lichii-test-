@@ -263,6 +263,10 @@ Dialog::Dialog(const Session& session, QNetworkAccessManager* network_, QWidget*
             QDesktopServices::openUrl(receipt_url);
         }
     });
+    connect(query, &QLineEdit::returnPressed, this, [this] {
+        page = 1;
+        Search();
+    });
     connect(query, &QLineEdit::textChanged, this, [this] {
         Abort();
         games->clear();
@@ -286,19 +290,24 @@ Dialog::Dialog(const Session& session, QNetworkAccessManager* network_, QWidget*
     connect(graphics_api, &QComboBox::currentIndexChanged, this, &Dialog::Edited);
     connect(public_consent, &QCheckBox::toggled, this, &Dialog::Refresh);
     connect(safe_files_consent, &QCheckBox::toggled, this, &Dialog::Refresh);
-    auto* cooldown = new QTimer(this);
+    cooldown = new QTimer(this);
     connect(cooldown, &QTimer::timeout, this, &Dialog::Refresh);
-    cooldown->start(1000);
     Refresh();
 }
 
 Dialog::~Dialog() {
     state = State::Closed;
+    if (cooldown) {
+        cooldown->stop();
+    }
     Abort();
 }
 
 void Dialog::reject() {
     state = State::Closed;
+    if (cooldown) {
+        cooldown->stop();
+    }
     Abort();
     QDialog::reject();
 }
@@ -392,6 +401,12 @@ void Dialog::Refresh() {
     const bool editing = state == State::Editing;
     const bool searching = state == State::Searching;
     const bool cooling_down = QDateTime::currentMSecsSinceEpoch() < retry_at;
+    if (!cooling_down) {
+        retry_at = 0;
+        if (cooldown && cooldown->isActive()) {
+            cooldown->stop();
+        }
+    }
     query->setEnabled(editing || searching);
     search->setEnabled(editing && !cooling_down);
     games->setEnabled(editing);
@@ -494,11 +509,6 @@ void Dialog::Request(bool submission, const QByteArray& payload) {
     }
     auto* pending = submission ? network->post(request, payload) : network->get(request);
     reply = pending;
-    QTimer::singleShot(20000, this, [this, pending = QPointer<QNetworkReply>(pending)] {
-        if (pending && reply == pending) {
-            pending->abort();
-        }
-    });
     pending->setReadBufferSize(ReplyLimit + 1);
     auto body = std::make_shared<QByteArray>();
     connect(pending, &QNetworkReply::readyRead, this, [this, pending, body] {
@@ -531,6 +541,9 @@ void Dialog::Finished(bool submission, int http_status, const QByteArray& body,
         const auto seconds = retry_after.toLongLong(&valid);
         const auto delay = valid && seconds >= 0 && seconds <= 31536000 ? seconds : 3600;
         retry_at = QDateTime::currentMSecsSinceEpoch() + delay * 1000;
+        if (delay > 0 && cooldown) {
+            cooldown->start(1000);
+        }
         status->setText(tr("Rate limit reached. Wait %1 seconds, then retry explicitly. "
                            "Nothing will be retried automatically.")
                             .arg(delay));

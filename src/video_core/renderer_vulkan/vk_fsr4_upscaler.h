@@ -17,6 +17,10 @@
 #include "common/common_types.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 
+namespace VideoCore {
+struct Fsr4Status;
+}
+
 namespace Vulkan {
 
 class Device;
@@ -56,6 +60,9 @@ public:
     /// Whether FSR 4 is turned on and the device can run it: AMD's driver on Windows, and on Linux
     /// what CheckFsr4Port asks of the device (the log says why not).
     [[nodiscard]] static bool IsWanted(const Device& device);
+
+    /// Evaluations that succeeded in this process, for the overlay and status bar.
+    [[nodiscard]] static VideoCore::Fsr4Status Status();
 
     /// Throws vk::Exception when FSR 4 can't start on this device: the runtime is missing or
     /// doesn't check out, or it offers no FSR 4 for the GPU.
