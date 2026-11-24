@@ -5,7 +5,9 @@
 
 #include "video_core/renderer_vulkan/pipeline_eviction_policy.h"
 
+using Vulkan::DefaultKeptComputePipelines;
 using Vulkan::DefaultKeptPipelines;
+using Vulkan::KeptComputePipelinesForMemory;
 using Vulkan::KeptPipelinesForMemory;
 using Vulkan::MaxUnusedPrebuiltPipelines;
 using Vulkan::PipelinesToEvict;
@@ -57,6 +59,11 @@ TEST_CASE("The kept limit is a quarter of the RAM", "[video_core][pipeline_evict
     REQUIRE(KeptPipelinesForMemory(8 * GiB) == 6990);
     REQUIRE(KeptPipelinesForMemory(16 * GiB) == 13981);
     REQUIRE(KeptPipelinesForMemory(32 * GiB) == 27962);
+
+    REQUIRE(KeptComputePipelinesForMemory(0) == DefaultKeptComputePipelines);
+    REQUIRE(KeptComputePipelinesForMemory(8 * GiB) == 6990 / 4);
+    REQUIRE(KeptComputePipelinesForMemory(16 * GiB) == 13981 / 4);
+    REQUIRE(KeptComputePipelinesForMemory(32 * GiB) == 27962 / 4);
 }
 
 TEST_CASE("The prebuild holds what the kept limit leaves past the boot builds",

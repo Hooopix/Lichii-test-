@@ -108,6 +108,24 @@ inline RegisterPressure PrepareRegisterPressure(const Instruction& input, u32 re
         operand(16);
         operand(32);
         break;
+    case 0xf66: { // TLD.SCR.LZ with uniform handle: Rd (+ optional second_dest), Ra coords, optional Rb.
+        const u32 components = static_cast<u32>(std::popcount(input.Bits(72, 4)));
+        const u32 dimension = input.Bits(61, 3);
+        const bool split = input.Bits(64, 8) != 255;
+        if (components == 0) {
+            result.valid = false;
+            return result;
+        }
+        operand(16, split ? (std::min)(components, 2U) : components);
+        if (split && components > 2) {
+            operand(64, components - 2);
+        }
+        operand(24, (dimension == 5 || dimension == 2) ? 2U : 1U);
+        if (dimension != 0) {
+            operand(32);
+        }
+        break;
+    }
     case 0xb6c:
     case 0xf6c: // TXD: results in Rd/Rd+1 and the second pair, coordinates in Ra (Ra+2 is the layer
                 // of ARRAY_2D), gradients in Rb..Rb+3.

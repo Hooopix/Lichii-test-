@@ -16,7 +16,14 @@
 namespace InputCommon::Switch2 {
 
 constexpr u16 NintendoVendorId = 0x057E;
+constexpr u16 JoyCon2LeftProductId = 0x2066;
+constexpr u16 JoyCon2RightProductId = 0x2067;
+constexpr u16 ChargingGripProductId = 0x2068;
 constexpr u16 ProControllerProductId = 0x2069;
+constexpr u16 GameCubeControllerProductId = 0x2073;
+
+constexpr u16 DefaultRumbleHighFrequency = 0x187;
+constexpr u16 DefaultRumbleLowFrequency = 0x112;
 
 constexpr std::size_t InputReportSize = 63;
 constexpr u8 UsbInputReportId = 0x05;
@@ -139,10 +146,19 @@ std::optional<CommandResponse> ParseCommandResponse(std::span<const u8> response
 std::optional<std::span<const u8>> ParseFlashReadResponse(std::span<const u8> response, u32 address,
                                                           u8 size);
 
+struct RumbleMotor {
+    u16 low_freq{DefaultRumbleLowFrequency};
+    u16 low_amp{};
+    u16 high_freq{DefaultRumbleHighFrequency};
+    u16 high_amp{};
+};
+
 std::array<u8, 5> EncodeHDRumble(u16 high_freq, u16 high_amp, u16 low_freq, u16 low_amp);
 
 // Write for the Pro Controller's BLE vibration characteristic: a zero byte, then the left and
 // right 16 byte motor blocks of USB output report 0x02. Amplitudes are SDL's 16-bit rumble values.
+std::array<u8, 33> BuildBleRumblePacket(u8 sequence, const RumbleMotor& left,
+                                        const RumbleMotor& right);
 std::array<u8, 33> BuildBleRumblePacket(u8 sequence, u16 low_amp, u16 high_amp);
 
 } // namespace InputCommon::Switch2

@@ -37,6 +37,8 @@ namespace {
 using namespace winrt::Windows::Devices::Bluetooth;
 using namespace winrt::Windows::Devices::Bluetooth::Advertisement;
 using namespace winrt::Windows::Devices::Bluetooth::GenericAttributeProfile;
+using winrt::Windows::Foundation::AsyncStatus;
+using winrt::Windows::Foundation::IAsyncOperation;
 using winrt::Windows::Foundation::IInspectable;
 using winrt::Windows::Foundation::Metadata::ApiInformation;
 using winrt::Windows::Storage::Streams::DataWriter;
@@ -65,7 +67,7 @@ constexpr winrt::guid CommandResponseUuid{
 
 constexpr auto CommandTimeout = std::chrono::seconds{3};
 constexpr auto RumbleInterval = std::chrono::milliseconds{12};
-constexpr auto MeasureTime = std::chrono::seconds{1};
+constexpr auto MeasureTime = std::chrono::milliseconds{250};
 constexpr auto StaleAfter = std::chrono::seconds{5};
 constexpr auto RetryAfter = std::chrono::seconds{5};
 constexpr auto WatcherCheckInterval = std::chrono::seconds{1};
@@ -149,6 +151,7 @@ struct Pad {
     u32 sent_rumble{};
     u8 rumble_sequence{};
     Clock::time_point next_rumble{};
+    IAsyncOperation<GattCommunicationStatus> rumble_write{nullptr};
     std::atomic<int> player_index{-1};
     std::atomic<bool> led_dirty{false};
 
@@ -165,17 +168,21 @@ std::span<const u8> View(const IBuffer& buffer) {
     return {buffer.data(), buffer.Length()};
 }
 
-GattCommunicationStatus Write(const GattCharacteristic& characteristic, std::span<const u8> data) {
+IAsyncOperation<GattCommunicationStatus> WriteAsync(const GattCharacteristic& characteristic,
+                                                    std::span<const u8> data) {
     DataWriter writer;
     writer.WriteBytes(winrt::array_view<const u8>(data.data(), data.data() + data.size()));
     const bool without_response =
         (static_cast<u32>(characteristic.CharacteristicProperties()) &
          static_cast<u32>(GattCharacteristicProperties::WriteWithoutResponse)) != 0;
-    return characteristic
-        .WriteValueAsync(writer.DetachBuffer(), without_response
-                                                    ? GattWriteOption::WriteWithoutResponse
-                                                    : GattWriteOption::WriteWithResponse)
-        .get();
+    return characteristic.WriteValueAsync(writer.DetachBuffer(),
+                                          without_response
+                                              ? GattWriteOption::WriteWithoutResponse
+                                              : GattWriteOption::WriteWithResponse);
+}
+
+GattCommunicationStatus Write(const GattCharacteristic& characteristic, std::span<const u8> data) {
+    return WriteAsync(characteristic, data).get();
 }
 
 bool Stopping(Pad& pad) {
@@ -382,6 +389,12 @@ bool FindCharacteristics(Pad& pad) {
 
 void ClosePad(Pad& pad) {
     try {
+        if (pad.rumble_write) {
+            if (pad.rumble_write.Status() == AsyncStatus::Started) {
+                pad.rumble_write.Cancel();
+            }
+            pad.rumble_write = nullptr;
+        }
         pad.input_revoker.revoke();
         pad.response_revoker.revoke();
         pad.status_revoker.revoke();
@@ -501,6 +514,16 @@ void Service(Pad& pad, Clock::time_point now) {
     if (pad.led_dirty.exchange(false)) {
         SendCommand(pad, Switch2::BuildPlayerLedCommand(pad.player_index, Switch2::Transport::Ble));
     }
+    if (pad.rumble_write) {
+        const auto status = pad.rumble_write.Status();
+        if (status == AsyncStatus::Started) {
+            return;
+        }
+        auto completed = std::exchange(pad.rumble_write, nullptr);
+        if (status != AsyncStatus::Canceled) {
+            (void)completed.GetResults();
+        }
+    }
     const u32 rumble = pad.rumble;
     if (!pad.vibration || (rumble == 0 && pad.sent_rumble == 0) || now < pad.next_rumble ||
         Stopping(pad)) {
@@ -508,7 +531,7 @@ void Service(Pad& pad, Clock::time_point now) {
     }
     const auto packet = Switch2::BuildBleRumblePacket(
         pad.rumble_sequence++, static_cast<u16>(rumble >> 16), static_cast<u16>(rumble));
-    Write(pad.vibration, packet);
+    pad.rumble_write = WriteAsync(pad.vibration, packet);
     pad.sent_rumble = rumble;
     pad.next_rumble = now + RumbleInterval;
 }

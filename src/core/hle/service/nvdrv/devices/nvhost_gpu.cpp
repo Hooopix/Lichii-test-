@@ -572,25 +572,31 @@ NvResult nvhost_gpu::SubmitGPFIFOImpl(IoctlSubmitGpfifo& params, Tegra::CommandL
                 bool done{};
             };
             auto wake = std::make_shared<Wake>();
-            syncpoints.RegisterGuestAction(params.fence.id, params.fence.value, [wake] {
-                {
-                    std::scoped_lock lk{wake->mutex};
-                    wake->done = true;
-                }
-                wake->cv.notify_all();
-            });
+            const auto action = syncpoints.RegisterGuestAction(
+                params.fence.id, params.fence.value, [wake] {
+                    {
+                        std::scoped_lock lk{wake->mutex};
+                        wake->done = true;
+                    }
+                    wake->cv.notify_all();
+                });
             const auto deadline =
                 std::chrono::steady_clock::now() + std::chrono::milliseconds{2000};
-            std::unique_lock lk{wake->mutex};
-            while (!wake->done && system.IsPoweredOn()) {
-                const auto now = std::chrono::steady_clock::now();
-                if (now >= deadline) {
-                    break;
-                }
-                wake->cv.wait_for(
-                    lk, std::min(std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now),
+            {
+                std::unique_lock lk{wake->mutex};
+                while (!wake->done && system.IsPoweredOn()) {
+                    const auto now = std::chrono::steady_clock::now();
+                    if (now >= deadline) {
+                        break;
+                    }
+                    wake->cv.wait_for(
+                        lk,
+                        std::min(std::chrono::duration_cast<std::chrono::milliseconds>(deadline -
+                                                                                       now),
                                  std::chrono::milliseconds{50}));
+                }
             }
+            syncpoints.DeregisterGuestAction(params.fence.id, action);
         }
         static std::atomic<u32> timeouts{};
         if (!syncpoints.IsReadyGuest(params.fence.id, params.fence.value) &&

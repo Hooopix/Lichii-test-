@@ -22,8 +22,6 @@ constexpr u8 CommandFeature = 0x0C;
 constexpr u8 SubcommandFeatureMask = 0x02;
 constexpr u8 SubcommandFeatureEnable = 0x04;
 
-constexpr u16 RumbleHighFrequency = 0x187;
-constexpr u16 RumbleLowFrequency = 0x112;
 constexpr int RumbleMax = 29000;
 
 u16 ReadU16(std::span<const u8> data, std::size_t offset) {
@@ -235,17 +233,30 @@ std::array<u8, 5> EncodeHDRumble(u16 high_freq, u16 high_amp, u16 low_freq, u16 
     };
 }
 
-std::array<u8, 33> BuildBleRumblePacket(u8 sequence, u16 low_amp, u16 high_amp) {
+std::array<u8, 33> BuildBleRumblePacket(u8 sequence, const RumbleMotor& left,
+                                        const RumbleMotor& right) {
     const auto clamp = [](u16 amp) { return static_cast<u16>(amp * RumbleMax / 0xFFFF); };
-    const auto sample =
-        EncodeHDRumble(RumbleHighFrequency, clamp(high_amp), RumbleLowFrequency, clamp(low_amp));
+    const auto left_sample =
+        EncodeHDRumble(left.high_freq, clamp(left.high_amp), left.low_freq, clamp(left.low_amp));
+    const auto right_sample = EncodeHDRumble(right.high_freq, clamp(right.high_amp), right.low_freq,
+                                             clamp(right.low_amp));
     std::array<u8, 33> packet{};
-    for (const std::size_t block : {std::size_t{1}, std::size_t{17}}) {
-        packet[block] = static_cast<u8>(0x50 | (sequence & 0x0F));
-        std::copy(sample.begin(), sample.end(),
-                  packet.begin() + static_cast<std::ptrdiff_t>(block) + 1);
-    }
+    const u8 header = static_cast<u8>(0x50 | (sequence & 0x0F));
+    packet[1] = header;
+    std::copy(left_sample.begin(), left_sample.end(), packet.begin() + 2);
+    packet[17] = header;
+    std::copy(right_sample.begin(), right_sample.end(), packet.begin() + 18);
     return packet;
+}
+
+std::array<u8, 33> BuildBleRumblePacket(u8 sequence, u16 low_amp, u16 high_amp) {
+    const RumbleMotor motor{
+        .low_freq = DefaultRumbleLowFrequency,
+        .low_amp = low_amp,
+        .high_freq = DefaultRumbleHighFrequency,
+        .high_amp = high_amp,
+    };
+    return BuildBleRumblePacket(sequence, motor, motor);
 }
 
 } // namespace InputCommon::Switch2

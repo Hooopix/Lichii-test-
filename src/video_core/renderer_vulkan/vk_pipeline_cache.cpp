@@ -576,6 +576,7 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
     // A sixty-fourth of the RAM (16 GB: 256 MB), about 25 KB per evicted pipeline
     const u64 ram = Common::GetMemInfo().TotalPhysicalMemory;
     kept_stages = decltype(kept_stages){ram != 0 ? ram / 64 : u64{256} << 20};
+    kept_compute_stages = decltype(kept_compute_stages){ram != 0 ? ram / 256 : u64{64} << 20};
     if (Settings::values.use_vulkan_driver_pipeline_cache.GetValue() && !use_vulkan_pipeline_cache) {
         LOG_INFO(Render_Vulkan, "Driver keeps its own pipeline cache, not saving a Vulkan one");
     }
@@ -940,6 +941,16 @@ size_t KeptPipelines() {
 #endif
 }
 
+size_t KeptComputePipelines() {
+#ifdef __ANDROID__
+    return 0;
+#else
+    static const size_t kept =
+        KeptComputePipelinesForMemory(Common::GetMemInfo().TotalPhysicalMemory);
+    return kept;
+#endif
+}
+
 /// Destroys the pipelines of `pipelines` (a map or a deque of pairs holding unique_ptrs), telling
 /// the frontend every few hundred that the teardown still moves: tens of thousands of them took
 /// longer than the frontend waited for the emulation thread.
@@ -995,6 +1006,20 @@ PipelineCache::~PipelineCache() {
     Common::NoteShutdownProgress();
     DestroyPipelinesWithProgress(graphics_cache);
     DestroyPipelinesWithProgress(evicted_pipelines);
+    {
+        constexpr size_t ProgressEvery = 256;
+        size_t destroyed = 0;
+        for (auto& entry : compute_cache) {
+            entry.second.pending_rebuild.reset();
+            entry.second.pipeline.reset();
+            if (++destroyed % ProgressEvery == 0) {
+                Common::NoteShutdownProgress();
+            }
+        }
+        compute_cache.clear();
+        Common::NoteShutdownProgress();
+    }
+    DestroyPipelinesWithProgress(retired_compute_pipelines);
     if (pipeline_binaries) {
         pipeline_binaries->LogCounts("at the end of the session");
         pipeline_binaries.reset();
@@ -1176,7 +1201,12 @@ ComputePipeline* PipelineCache::CurrentComputePipeline(u64& native_key) {
         entry = std::move(rebuilt);
     };
     if (is_new) {
-        entry = CreateComputePipeline(key, shader);
+        if (auto kept = kept_compute_stages.Take(key)) {
+            entry = RebuildComputePipeline(key, std::move(*kept));
+            ++rebuilt_compute_from_kept;
+        } else {
+            entry = CreateComputePipeline(key, shader);
+        }
     } else if (entry.pending_rebuild) {
         if (entry.pending_rebuild->pipeline->IsBuilt()) {
             auto rebuilt{std::move(*entry.pending_rebuild)};
@@ -1222,6 +1252,9 @@ ComputePipeline* PipelineCache::CurrentComputePipeline(u64& native_key) {
             is_new ? VideoCommon::StutterTrace::Lookup::ComputeNew
                    : VideoCommon::StutterTrace::Lookup::ComputePrebuilt);
     }
+    if (entry.pipeline) {
+        entry.pipeline->MarkUsed(frame_count);
+    }
     return entry.Get(kepler_compute->IsNativeMode(),
                      kepler_compute->regs.code_loc.Address() + qmd.program_start, key);
 }
@@ -1253,6 +1286,7 @@ ComputePipeline* PipelineCache::UnlentComputePipeline(u64& native_key) {
     if (VideoCommon::StutterTrace::Enabled() && !std::exchange(entry.used, true)) {
         VideoCommon::StutterTrace::CountLookup(VideoCommon::StutterTrace::Lookup::ComputePrebuilt);
     }
+    entry.pipeline->MarkUsed(frame_count);
     return entry.pipeline.get();
 }
 
@@ -2607,26 +2641,27 @@ void PipelineCache::EvictUnusedPipelines() {
     // rebuilt in 80 min, multi-second freezes). So they go only past the kept limit, least
     // recently used first; a prebuilt one no draw has used counts as used at boot.
     const u64 cutoff = frame_count - EvictAfterFrames;
+    const u64 tick = scheduler.CurrentTick();
+
     std::vector<GraphicsPipelineCacheKey> evict;
     if (const size_t kept = KeptPipelines(); kept != 0) {
         const size_t built = static_cast<size_t>(
             std::ranges::count_if(graphics_cache, [](const auto& entry) {
                 return entry.second != nullptr && entry.second->IsBuilt();
             }));
-        if (built <= kept) {
-            return;
-        }
-        std::vector<GraphicsPipelineCacheKey> keys;
-        std::vector<u64> last_uses;
-        for (const auto& [key, pipeline] : graphics_cache) {
-            if (pipeline != nullptr && pipeline.get() != current_pipeline && pipeline->IsBuilt() &&
-                pipeline->LastUse() < cutoff) {
-                keys.push_back(key);
-                last_uses.push_back(pipeline->WasUsed() ? pipeline->LastUse() : 0);
+        if (built > kept) {
+            std::vector<GraphicsPipelineCacheKey> keys;
+            std::vector<u64> last_uses;
+            for (const auto& [key, pipeline] : graphics_cache) {
+                if (pipeline != nullptr && pipeline.get() != current_pipeline &&
+                    pipeline->IsBuilt() && pipeline->LastUse() < cutoff) {
+                    keys.push_back(key);
+                    last_uses.push_back(pipeline->WasUsed() ? pipeline->LastUse() : 0);
+                }
             }
-        }
-        for (const size_t index : PipelinesToEvict(last_uses, built, kept)) {
-            evict.push_back(keys[index]);
+            for (const size_t index : PipelinesToEvict(last_uses, built, kept)) {
+                evict.push_back(keys[index]);
+            }
         }
     } else if (!Settings::values.build_all_cached_shaders.GetValue()) {
         size_t kept_prebuilt = 0;
@@ -2642,35 +2677,88 @@ void PipelineCache::EvictUnusedPipelines() {
             evict.push_back(key);
         }
     }
-    if (evict.empty()) {
-        return;
-    }
-    const u64 tick = scheduler.CurrentTick();
-    for (const GraphicsPipelineCacheKey& key : evict) {
-        const auto it = graphics_cache.find(key);
-        if (used_this_session.erase(it->second.get()) != 0) {
-            used_and_evicted.insert(it->first.Hash());
+    if (!evict.empty()) {
+        for (const GraphicsPipelineCacheKey& key : evict) {
+            const auto it = graphics_cache.find(key);
+            if (used_this_session.erase(it->second.get()) != 0) {
+                used_and_evicted.insert(it->first.Hash());
+            }
+            evicted_hashes.insert(it->first.Hash());
+            evicted_pointer_slots.Remember(it->first.Hash(), it->second->MappedPointers());
+            KeptGraphicsStages kept = it->second->TakeKeptStages();
+            const u64 bytes = kept.Bytes();
+            kept_stages.Add(it->first, std::move(kept), bytes);
+            evicted_pipelines.emplace_back(tick, std::move(it->second));
+            graphics_cache.erase(it);
         }
-        evicted_hashes.insert(it->first.Hash());
-        evicted_pointer_slots.Remember(it->first.Hash(), it->second->MappedPointers());
-        KeptGraphicsStages kept = it->second->TakeKeptStages();
-        const u64 bytes = kept.Bytes();
-        kept_stages.Add(it->first, std::move(kept), bytes);
-        evicted_pipelines.emplace_back(tick, std::move(it->second));
-        graphics_cache.erase(it);
+        for (auto& [key, pipeline] : graphics_cache) {
+            if (pipeline) {
+                pipeline->ClearTransitions();
+            }
+        }
+        LOG_INFO(Render_Vulkan,
+                 "Evicted {} graphics pipelines unused for {} frames, {} left; {} evicted ones kept "
+                 "for a rebuild ({} KiB), {} rebuilt from them and {} translated again since the last",
+                 evict.size(), EvictAfterFrames, graphics_cache.size(), kept_stages.Size(),
+                 kept_stages.Bytes() >> 10, rebuilt_from_kept, translated_again);
+        rebuilt_from_kept = 0;
+        translated_again = 0;
     }
-    for (auto& [key, pipeline] : graphics_cache) {
-        if (pipeline) {
-            pipeline->ClearTransitions();
+
+    std::vector<ComputePipelineCacheKey> evict_compute;
+    if (const size_t kept_compute = KeptComputePipelines(); kept_compute != 0) {
+        const size_t built_compute = static_cast<size_t>(
+            std::ranges::count_if(compute_cache, [](const auto& pair) {
+                return pair.second.pipeline != nullptr && pair.second.pipeline->IsBuilt();
+            }));
+        if (built_compute > kept_compute) {
+            std::vector<ComputePipelineCacheKey> keys;
+            std::vector<u64> last_uses;
+            for (const auto& [key, entry] : compute_cache) {
+                if (entry.pipeline != nullptr && !entry.pending_rebuild &&
+                    entry.pipeline->IsBuilt() && entry.pipeline->LastUse() < cutoff) {
+                    keys.push_back(key);
+                    last_uses.push_back(entry.pipeline->WasUsed() ? entry.pipeline->LastUse() : 0);
+                }
+            }
+            for (const size_t index : PipelinesToEvict(last_uses, built_compute, kept_compute)) {
+                evict_compute.push_back(keys[index]);
+            }
+        }
+    } else if (!Settings::values.build_all_cached_shaders.GetValue()) {
+        for (const auto& [key, entry] : compute_cache) {
+            if (entry.pipeline != nullptr && !entry.pending_rebuild &&
+                entry.pipeline->IsBuilt() && entry.pipeline->LastUse() < cutoff) {
+                evict_compute.push_back(key);
+            }
         }
     }
-    LOG_INFO(Render_Vulkan,
-             "Evicted {} graphics pipelines unused for {} frames, {} left; {} evicted ones kept "
-             "for a rebuild ({} KiB), {} rebuilt from them and {} translated again since the last",
-             evict.size(), EvictAfterFrames, graphics_cache.size(), kept_stages.Size(),
-             kept_stages.Bytes() >> 10, rebuilt_from_kept, translated_again);
-    rebuilt_from_kept = 0;
-    translated_again = 0;
+    if (!evict_compute.empty()) {
+        for (const ComputePipelineCacheKey& key : evict_compute) {
+            const auto it = compute_cache.find(key);
+            auto& entry = it->second;
+            if (!entry.pipeline->KeptSpirv().empty()) {
+                KeptComputeStage kept{
+                    .spirv = entry.pipeline->TakeKeptSpirv(),
+                    .info = entry.pipeline->GetInfo(),
+                    .null_pointer_slots = std::move(entry.null_pointer_slots),
+                    .mapped_pointers = std::move(entry.mapped_pointers),
+                    .rebuilds = entry.rebuilds,
+                };
+                const u64 bytes = kept.Bytes();
+                kept_compute_stages.Add(it->first, std::move(kept), bytes);
+            }
+            retired_compute_pipelines.emplace_back(tick, std::move(entry.pipeline));
+            compute_cache.erase(it);
+        }
+        LOG_INFO(Render_Vulkan,
+                 "Evicted {} compute pipelines unused for {} frames, {} left; {} evicted ones kept "
+                 "for a rebuild ({} KiB), {} rebuilt from them since the last",
+                 evict_compute.size(), EvictAfterFrames, compute_cache.size(),
+                 kept_compute_stages.Size(), kept_compute_stages.Bytes() >> 10,
+                 rebuilt_compute_from_kept);
+        rebuilt_compute_from_kept = 0;
+    }
 }
 
 NativePendingMode PipelineCache::NativeMode() const {
@@ -2860,6 +2948,31 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::RebuildGraphicsPipeline(KeptGra
         std::move(kept.mesh_emulation));
     pipeline->SetMappedPointers(std::move(kept.mapped_pointers));
     return pipeline;
+}
+
+ComputePipelineCacheEntry PipelineCache::RebuildComputePipeline(const ComputePipelineCacheKey& key,
+                                                                KeptComputeStage kept) {
+    const u64 bytes = kept.Bytes();
+    const Shader::Info info = std::move(kept.info);
+    auto emit = [this, spirv = std::move(kept.spirv),
+                 shader_hash = key.unique_hash](std::vector<u8>& kept_spirv) mutable {
+        const std::vector<u8> data = Common::Compression::DecompressDataZSTD(spirv);
+        std::vector<u32> code(data.size() / sizeof(u32));
+        std::memcpy(code.data(), data.data(), code.size() * sizeof(u32));
+        kept_spirv = std::move(spirv);
+        return BuildGuestShader(device, code, shader_hash);
+    };
+    auto pipeline = std::make_unique<ComputePipeline>(
+        device, scheduler, vulkan_pipeline_cache, pipeline_binaries.get(), key.Hash(),
+        descriptor_pool, guest_descriptor_queue, descriptor_buffer_ring,
+        BuildQueue(true, bytes), nullptr, &shader_notify, info, vk::ShaderModule{},
+        key.unique_hash, std::vector<u8>{}, std::move(emit));
+    return {
+        .pipeline = std::move(pipeline),
+        .null_pointer_slots = std::move(kept.null_pointer_slots),
+        .mapped_pointers = std::move(kept.mapped_pointers),
+        .rebuilds = kept.rebuilds,
+    };
 }
 
 std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(

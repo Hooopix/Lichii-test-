@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <optional>
 #include <source_location>
@@ -58,6 +59,8 @@ public:
     };
     void BindVertices(u32 first, std::span<const VertexBinding> bindings, bool extended);
     void BindTransformFeedback(u32 first, std::span<const VertexBinding> bindings);
+    /// Clears tracked vertex buffer bindings (e.g. after vkCmdSetVertexInputEXT mutates dynamic strides).
+    void InvalidateVertexBindings() noexcept;
 
     /// The stamp of what is recorded now (buffer usage, the buffer staging pool).
     [[nodiscard]] u64 Now() const noexcept;
@@ -232,6 +235,18 @@ private:
     VkIndexType bound_index_type = VK_INDEX_TYPE_UINT32;
     u64 bound_index_epoch = 0;
     bool bound_index_valid = false;
+
+    /// Vertex buffers bound per slot in the current scheduler recording epoch.
+    struct BoundVertex {
+        VkBuffer buffer = VK_NULL_HANDLE;
+        VkDeviceSize offset = 0;
+        VkDeviceSize size = 0;
+        VkDeviceSize stride = 0;
+        u64 epoch = 0;
+        bool extended = false;
+        bool valid = false;
+    };
+    std::array<BoundVertex, 32> bound_vertices{};
 
     u64 plays{};
     u64 played_records{};

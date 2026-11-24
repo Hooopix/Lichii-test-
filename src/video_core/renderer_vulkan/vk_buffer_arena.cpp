@@ -388,12 +388,37 @@ void BufferArena::Exec(const BindIndexBody& body, std::span<const u8>) {
     });
 }
 
+void BufferArena::InvalidateVertexBindings() noexcept {
+    for (auto& slot : bound_vertices) {
+        slot.valid = false;
+    }
+}
+
 void BufferArena::Exec(const BindVertexBody& body, std::span<const u8>) {
+    const VkDeviceSize vk_offset = (body.extended && body.buffer == VK_NULL_HANDLE) ? 0 : body.offset;
+    const VkDeviceSize vk_size =
+        (body.extended && body.buffer == VK_NULL_HANDLE) ? VK_WHOLE_SIZE : body.size;
+    if (!VideoCommon::Nx2Perf::Verify() && body.index < bound_vertices.size()) {
+        const u64 epoch = scheduler.RecordingEpoch();
+        auto& slot = bound_vertices[body.index];
+        if (slot.valid && slot.epoch == epoch && slot.extended == body.extended &&
+            slot.buffer == body.buffer && slot.offset == vk_offset &&
+            (!body.extended || (slot.size == vk_size && slot.stride == body.stride))) {
+            return;
+        }
+        slot = {
+            .buffer = body.buffer,
+            .offset = vk_offset,
+            .size = vk_size,
+            .stride = body.stride,
+            .epoch = epoch,
+            .extended = body.extended,
+            .valid = true,
+        };
+    }
     if (body.extended) {
-        scheduler.Record([index = body.index, buffer = body.buffer, offset = body.offset,
-                          size = body.size, stride = body.stride](vk::CommandBuffer cmdbuf) {
-            const VkDeviceSize vk_offset = buffer != VK_NULL_HANDLE ? offset : 0;
-            const VkDeviceSize vk_size = buffer != VK_NULL_HANDLE ? size : VK_WHOLE_SIZE;
+        scheduler.Record([index = body.index, buffer = body.buffer, vk_offset, vk_size,
+                          stride = body.stride](vk::CommandBuffer cmdbuf) {
             cmdbuf.BindVertexBuffers2EXT(index, 1, &buffer, &vk_offset, &vk_size, &stride);
         });
         return;
@@ -405,6 +430,36 @@ void BufferArena::Exec(const BindVertexBody& body, std::span<const u8>) {
 }
 
 void BufferArena::Exec(const BindVerticesBody& body, std::span<const VertexBinding> bindings) {
+    if (!VideoCommon::Nx2Perf::Verify() && !bindings.empty() &&
+        body.first + bindings.size() <= bound_vertices.size()) {
+        const u64 epoch = scheduler.RecordingEpoch();
+        bool all_same = true;
+        for (size_t i = 0; i < bindings.size(); ++i) {
+            const auto& slot = bound_vertices[body.first + i];
+            const auto& binding = bindings[i];
+            if (!slot.valid || slot.epoch != epoch || slot.extended != body.extended ||
+                slot.buffer != binding.buffer || slot.offset != binding.offset ||
+                (body.extended && (slot.size != binding.size || slot.stride != binding.stride))) {
+                all_same = false;
+                break;
+            }
+        }
+        if (all_same) {
+            return;
+        }
+        for (size_t i = 0; i < bindings.size(); ++i) {
+            const auto& binding = bindings[i];
+            bound_vertices[body.first + i] = {
+                .buffer = binding.buffer,
+                .offset = binding.offset,
+                .size = binding.size,
+                .stride = binding.stride,
+                .epoch = epoch,
+                .extended = body.extended,
+                .valid = true,
+            };
+        }
+    }
     HandleArray buffers;
     VertexArray offsets, sizes, strides;
     for (const VertexBinding& binding : bindings) {

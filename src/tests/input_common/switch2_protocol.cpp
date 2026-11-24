@@ -193,4 +193,17 @@ TEST_CASE("Switch2: rumble encoding", "[input_common]") {
     REQUIRE(std::equal(full.begin() + 1, full.begin() + 7, full.begin() + 17));
     REQUIRE(full[5] == ((29000 & 0xC0) | (0x112 >> 4)));
     REQUIRE(full[6] == (29000 >> 8));
+
+    const RumbleMotor left{.low_freq = 0x100, .low_amp = 0x8000, .high_freq = 0x190, .high_amp = 0};
+    const RumbleMotor right{
+        .low_freq = 0x120, .low_amp = 0, .high_freq = 0x1B0, .high_amp = 0xFFFF};
+    const auto stereo = BuildBleRumblePacket(3, left, right);
+    REQUIRE(stereo[0] == 0x00);
+    REQUIRE(stereo[1] == 0x53);
+    REQUIRE(stereo[17] == 0x53);
+    const auto left_expected = EncodeHDRumble(0x190, 0, 0x100, static_cast<u16>(0x8000 * 29000 / 0xFFFF));
+    const auto right_expected = EncodeHDRumble(0x1B0, 29000, 0x120, 0);
+    REQUIRE(std::equal(left_expected.begin(), left_expected.end(), stereo.begin() + 2));
+    REQUIRE(std::equal(right_expected.begin(), right_expected.end(), stereo.begin() + 18));
+    REQUIRE_FALSE(std::equal(stereo.begin() + 2, stereo.begin() + 7, stereo.begin() + 18));
 }

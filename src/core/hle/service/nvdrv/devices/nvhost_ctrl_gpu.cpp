@@ -358,7 +358,7 @@ NvResult nvhost_ctrl_gpu::GetCharacteristics3(
 NvResult nvhost_ctrl_gpu::GetTPCMasks1(IoctlGpuGetTpcMasksArgs& params) {
     LOG_DEBUG(Service_NVDRV, "called, mask_buffer_size={:#x}", params.mask_buffer_size);
     if (params.mask_buffer_size != 0) {
-        params.tcp_mask = 3;
+        params.tcp_mask = (nx2_caller || Tegra::g_nx2_ampere) ? 0x3FU : 3U;
     }
     return NvResult::Success;
 }
@@ -366,7 +366,7 @@ NvResult nvhost_ctrl_gpu::GetTPCMasks1(IoctlGpuGetTpcMasksArgs& params) {
 NvResult nvhost_ctrl_gpu::GetTPCMasks3(IoctlGpuGetTpcMasksArgs& params, std::span<u32> tpc_mask) {
     LOG_DEBUG(Service_NVDRV, "called, mask_buffer_size={:#x}", params.mask_buffer_size);
     if (params.mask_buffer_size != 0) {
-        params.tcp_mask = 3;
+        params.tcp_mask = (nx2_caller || Tegra::g_nx2_ampere) ? 0x3FU : 3U;
     }
     if (!tpc_mask.empty()) {
         tpc_mask.front() = params.tcp_mask;

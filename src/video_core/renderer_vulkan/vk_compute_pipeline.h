@@ -139,6 +139,29 @@ public:
         return kept_spirv;
     }
 
+    /// Moves out the zstd-compressed SPIR-V kept after the build for an evicted pipeline.
+    [[nodiscard]] std::vector<u8> TakeKeptSpirv() noexcept {
+        return std::move(kept_spirv);
+    }
+
+    [[nodiscard]] const Shader::Info& GetInfo() const noexcept {
+        return info;
+    }
+
+    /// The frame the pipeline cache last handed this pipeline out (evicts long unused ones).
+    void MarkUsed(u64 frame) noexcept {
+        last_use_frame = frame;
+        was_used = true;
+    }
+
+    [[nodiscard]] u64 LastUse() const noexcept {
+        return last_use_frame;
+    }
+
+    [[nodiscard]] bool WasUsed() const noexcept {
+        return was_used;
+    }
+
     /// True the first time it is called, so a dispatch's wait for this build is logged once
     [[nodiscard]] bool FirstWaitForBuild() noexcept {
         return !std::exchange(wait_logged, true);
@@ -193,6 +216,8 @@ private:
     DescriptorBufferRing& descriptor_buffer_ring;
     Shader::Info info;
     u64 shader_hash{};
+    u64 last_use_frame{};
+    bool was_used{};
     u32 num_descriptor_entries{};
     bool unlend_ok{};
     u32 handle_cbufs{};
