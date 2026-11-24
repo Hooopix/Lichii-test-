@@ -91,11 +91,11 @@ function(FixMsysPath target)
         INTERFACE_INCLUDE_DIRECTORIES ${include_dir})
 endfunction()
 
-# Saves linking time. YUZU_MINGW_KEEP_SYMBOLS keeps the symbol table, and any debug line tables
+# Saves linking time. LICHII_MINGW_KEEP_SYMBOLS keeps the symbol table, and any debug line tables
 # the build adds (such as -gline-tables-only), for sampling profiles.
-option(YUZU_MINGW_KEEP_SYMBOLS "Keep symbols in MinGW release builds" OFF)
+option(LICHII_MINGW_KEEP_SYMBOLS "Keep symbols in MinGW release builds" OFF)
 if (MINGW)
-    if (YUZU_MINGW_KEEP_SYMBOLS)
+    if (LICHII_MINGW_KEEP_SYMBOLS)
         set(MINGW_FLAGS "-Wl,--gc-sections")
     else()
         set(MINGW_FLAGS "-Wl,--strip-all -Wl,--gc-sections")

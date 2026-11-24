@@ -14,7 +14,7 @@ PATHS = [
 OPTIONS = [
     "BOOST_v1", "BUILD_PRESET", "BUNDLED_OPENSSL", "CMD", "CMD_ENTRY", "CRASH_DUMPS",
     "DISABLE_LLVM", "DOWNLOAD_ANDROID_VVL", "DOWNLOAD_TIME_ZONE_DATA", "EXE_DIR", "ICON",
-    "INSTALL_UDEV_RULES", "LEGACY", "MSVC_DIAGNOSTICS", "MSVC_DIAGNOSTIC_CODES",
+    "INSTALL_UDEV_RULES", "LEGACY", "MINGW_KEEP_SYMBOLS", "MSVC_DIAGNOSTICS", "MSVC_DIAGNOSTIC_CODES",
     "MSVC_DIAGNOSTIC_LEVEL", "QT_COMPONENTS", "QT_LANGUAGES", "QT_MIRROR", "QT_OPTIONAL",
     "ROOM", "ROOM_STANDALONE", "STATIC_BUILD", "STATIC_ROOM", "TESTS", "TZDB_PATH",
     "USE_BUNDLED_FFMPEG", "USE_BUNDLED_MOLTENVK", "USE_BUNDLED_OPENSSL", "USE_BUNDLED_QT",
@@ -59,5 +59,7 @@ KEEP = [
     (r"YUZU_\$\{_?\w+\}|\"YUZU_\"", "compat", "old -DYUZU_* CMake options read by LegacyOptions.cmake",
      "CMakeModules/LegacyOptions.cmake"),
     (r"YuzuRoom-BanList-1", "compat", "ban list file magic of existing room ban lists"),
-    (r"derived from Yuzu and Sudachi|inherited from yuzu and Sudachi", "attribution", "project lineage"),
+    (r"derived from Yuzu and Sudachi|inherited from yuzu and Sudachi"
+     r"|open-source lineage of Lichii, Eglantine, Eden, Sudachi, and yuzu"
+     r"|shoulders of the Lichii, Eglantine, Eden, Sudachi, and yuzu", "attribution", "project lineage"),
 ]

@@ -66,7 +66,7 @@ jobs:
             autoconf gcc-13 g++-13 git glslang-tools libglu1-mesa-dev \
             libpulse-dev libtool libudev-dev libxkbcommon-x11-0 \
             mesa-common-dev nasm ninja-build qt6-base-private-dev \
-            qt6-charts-dev qt6-tools-dev libavfilter-dev libavcodec-dev \
+            qt6-tools-dev libavfilter-dev libavcodec-dev \
             libswscale-dev pkg-config zlib1g-dev libva-dev libvdpau-dev \
             spirv-tools spirv-headers libusb-1.0-0-dev \
             libboost-dev libboost-fiber-dev libboost-context-dev \
@@ -83,7 +83,7 @@ jobs:
           host: linux
           target: desktop
           arch: linux_gcc_64
-          modules: qtcharts qtimageformats
+          modules: qtimageformats
           cache: true
 
       # Objects are keyed by content, so nx2's newest cache always helps;
@@ -159,10 +159,10 @@ jobs:
       - name: Test Linux switch discovery
         run: CXX=g++-13 python3 tools/nx2/test_switches.py
 
-      # Only nx2 saves: pull requests restore nx2's cache, and their own entries (one per push)
+      # Only nx2 and hoochii-nx2 save: pull requests restore their cache, and their own entries (one per push)
       # filled the repository's 10 GB cache budget and evicted the release builds' caches.
       - name: Save dependencies and compiler objects
-        if: github.ref == 'refs/heads/nx2' && !cancelled()
+        if: (github.ref == 'refs/heads/hoochii-nx2' || github.ref == 'refs/heads/nx2') && !cancelled()
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
         with:
           path: |
@@ -171,7 +171,7 @@ jobs:
           key: gcc13-qt683-${{ runner.os }}-${{ github.sha }}
 
       - name: Delete superseded caches
-        if: github.ref == 'refs/heads/nx2' && !cancelled()
+        if: (github.ref == 'refs/heads/hoochii-nx2' || github.ref == 'refs/heads/nx2') && !cancelled()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
@@ -339,7 +339,7 @@ jobs:
           host: windows
           target: desktop
           arch: win64_msvc2022_64
-          modules: qtcharts qtimageformats
+          modules: qtimageformats
           cache: true
 
       - name: Install ccache
@@ -430,7 +430,7 @@ jobs:
         run: ctest --test-dir build --output-on-failure --no-tests=error --parallel "$NUMBER_OF_PROCESSORS"
 
       - name: Save dependencies and compiler objects
-        if: github.ref == 'refs/heads/nx2' && !cancelled()
+        if: (github.ref == 'refs/heads/hoochii-nx2' || github.ref == 'refs/heads/nx2') && !cancelled()
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
         with:
           path: |
@@ -439,7 +439,7 @@ jobs:
           key: clang-cl-ccache-qt683-${{ runner.os }}-${{ github.sha }}
 
       - name: Delete superseded caches
-        if: github.ref == 'refs/heads/nx2' && !cancelled()
+        if: (github.ref == 'refs/heads/hoochii-nx2' || github.ref == 'refs/heads/nx2') && !cancelled()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}

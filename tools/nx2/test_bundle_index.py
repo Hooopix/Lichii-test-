@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import copy
 import io
 import json
 import os
@@ -11,6 +12,7 @@ import unittest
 import zipfile
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 # -I leaves the script's directory off sys.path.
@@ -161,6 +163,45 @@ class BundleIndexTest(unittest.TestCase):
         finally:
             bundle_index.MAX_UNPACKED = limit
         self.assertNotIn("JSON", str(caught.exception))
+
+    def test_rejects_spoofed_small_file_size_exceeding_max_unpacked(self):
+        bundle = self.dir / "spoofed.zip"
+        with zipfile.ZipFile(bundle, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("bundle.json", json.dumps(MANIFEST))
+            archive.writestr("logs/eden_log.txt", "A" * 4096)
+        limit = bundle_index.MAX_UNPACKED
+        bundle_index.MAX_UNPACKED = 1024
+        try:
+            with zipfile.ZipFile(bundle) as archive:
+                real_sizes = {info.filename: info.file_size for info in archive.infolist()}
+                for info in archive.infolist():
+                    info.file_size = 1
+                real_open = archive.open
+
+                def open_real_size(info, *args, **kwargs):
+                    cloned = copy.copy(info)
+                    cloned.file_size = real_sizes[info.filename]
+                    return real_open(cloned, *args, **kwargs)
+
+                bundle_index.check_members(archive.infolist())
+                with patch.object(archive, "open", side_effect=open_real_size):
+                    bundle_index.read_manifest(archive)
+                    with self.assertRaisesRegex(bundle_index.BundleError, "more than"):
+                        bundle_index.unpack(archive, self.dir / "out")
+        finally:
+            bundle_index.MAX_UNPACKED = limit
+
+    def test_rejects_oversized_manifest_in_read_manifest(self):
+        bundle = self.dir / "big-manifest.zip"
+        write_zip(bundle, {"bundle.json": json.dumps({**MANIFEST, "description": "x" * 1024})})
+        limit = bundle_index.MAX_MANIFEST_BYTES
+        bundle_index.MAX_MANIFEST_BYTES = 128
+        try:
+            with zipfile.ZipFile(bundle) as archive:
+                with self.assertRaisesRegex(bundle_index.BundleError, "exceeds"):
+                    bundle_index.read_manifest(archive)
+        finally:
+            bundle_index.MAX_MANIFEST_BYTES = limit
 
 
 class FrameDumpIndexTest(unittest.TestCase):

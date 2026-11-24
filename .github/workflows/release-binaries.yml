@@ -124,6 +124,7 @@ jobs:
           - platform: linux-x86_64-pgo
             runner: ubuntu-24.04
             pgo: true
+            profile: eglantine.profdata
           - platform: windows-x86_64
             runner: windows-2022
           - platform: windows-x86_64-pgo
@@ -135,6 +136,7 @@ jobs:
           - platform: linux-aarch64-pgo
             runner: ubuntu-24.04-arm
             pgo: true
+            profile: eglantine.profdata
           - platform: macos-arm64
             runner: macos-15
 
@@ -167,7 +169,7 @@ jobs:
             autoconf cmake g++ gcc git glslang-tools libglu1-mesa-dev \
             libpulse-dev libtool libudev-dev libxkbcommon-x11-0 \
             mesa-common-dev nasm ninja-build qt6-base-private-dev \
-            qt6-charts-dev qt6-tools-dev libavfilter-dev libavcodec-dev \
+            qt6-tools-dev libavfilter-dev libavcodec-dev \
             libswscale-dev pkg-config zlib1g-dev libva-dev libvdpau-dev \
             spirv-tools spirv-headers libusb-1.0-0-dev \
             libboost-dev libboost-fiber-dev libboost-context-dev \
@@ -208,7 +210,7 @@ jobs:
           host: linux
           target: desktop
           arch: linux_gcc_64
-          modules: qtcharts qtimageformats
+          modules: qtimageformats
           cache: true
 
       - name: Install Qt on Linux ARM64
@@ -219,7 +221,7 @@ jobs:
           host: linux_arm64
           target: desktop
           arch: linux_gcc_arm64
-          modules: qtcharts qtimageformats
+          modules: qtimageformats
           cache: true
 
       # Ubuntu's own clang 18 cannot read a profile from a current LLVM, so take clang from the LLVM
@@ -291,7 +293,7 @@ jobs:
           host: windows
           target: desktop
           arch: win64_msvc2022_64
-          modules: qtcharts qtimageformats
+          modules: qtimageformats
           cache: true
 
       # ccache rather than sccache, as in build-check: sccache has no direct mode for clang-cl, so
@@ -629,7 +631,7 @@ jobs:
         if: startsWith(matrix.platform, 'windows')
         shell: pwsh
         run: |
-          foreach ($file in 'hoochii.exe', 'hoochii-cli.exe', 'flyhigh.dll', 'licenses/flyhigh/LICENSE', 'licenses/flyhigh/NOTICE') {
+          foreach ($file in 'hoochii.exe', 'hoochii-cli.exe', 'hoochii-updater.exe', 'flyhigh.dll', 'qt.conf', 'Qt6Core.dll', 'licenses/flyhigh/LICENSE', 'licenses/flyhigh/NOTICE') {
             if (-not (Test-Path "build/release/bin/$file" -PathType Leaf)) {
               throw "build/release/bin/$file was not produced"
             }
@@ -637,7 +639,6 @@ jobs:
           # Symbols ship as their own artifact, not in the release zip.
           New-Item -ItemType Directory -Force build/release/symbols | Out-Null
           Move-Item build/release/bin/*.pdb build/release/symbols/
-          windeployqt --release --no-translations build/release/bin/hoochii.exe
           if (Get-ChildItem -Recurse build/release/bin -Filter 'GFSDK_*') {
             throw 'build/release/bin holds Nsight Aftermath files, which must not ship'
           }
@@ -828,6 +829,7 @@ jobs:
               (cd "$artifact" && zip -qr "${GITHUB_WORKSPACE}/dist/$(strip_sha "$name").zip" .)
             fi
           done
+          (cd dist && sha256sum -- * > SHA256SUMS.txt)
           ls -la dist
 
       - name: Create release
@@ -856,6 +858,12 @@ jobs:
             exe=$(link "installer.exe" "$1-installer.exe")
             zip=$(link "zip" "$1.zip")
             echo "${exe}${exe:+${zip:+ · }}${zip}"
+          }
+          macos_dmg_zip() {
+            local dmg zip
+            dmg=$(link "dmg" "$1.dmg")
+            zip=$(link "zip" "$1.zip")
+            echo "${dmg}${dmg:+${zip:+ · }}${zip}"
           }
           has_pgo=$(compgen -G 'dist/*-pgo.*' || true)
           row() {
@@ -900,7 +908,7 @@ jobs:
 
           ## macOS
 
-          $(row "arm64 (Apple Silicon)" "$(link zip hoochii-macos-arm64.zip)" "" "macOS 15 or newer. Not notarized: right-click and choose Open the first time, or run \`xattr -dr com.apple.quarantine hoochii.app\`. \`hoochii-cli\` is inside the app, in \`Contents/MacOS\`" | table)
+          $(row "arm64 (Apple Silicon)" "$(macos_dmg_zip hoochii-macos-arm64)" "" "macOS 15 or newer. Not notarized: right-click and choose Open the first time, or run \`xattr -dr com.apple.quarantine hoochii.app\`. \`hoochii-cli\` is inside the app, in \`Contents/MacOS\`" | table)
 
           ${pgo_note}
           EOF

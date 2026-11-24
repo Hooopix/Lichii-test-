@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Replays GPU traces (docs/nx2/gpu-trace.md) and compares their frames.
 
-  trace_replay.py replay --cli <eden-cli> <trace> --out <dir>
-  trace_replay.py compare --base <eden-cli> --head <eden-cli> <trace> --out <dir>
-  trace_replay.py check --cli <eden-cli> --corpus tests/gpu_traces/corpus.json [--traces <dir>]
+  trace_replay.py replay --cli <hoochii-cli> <trace> --out <dir>
+  trace_replay.py compare --base <hoochii-cli> --head <hoochii-cli> <trace> --out <dir>
+  trace_replay.py check --cli <hoochii-cli> --corpus tests/gpu_traces/corpus.json [--traces <dir>]
 
 compare replays one trace on two builds and writes <out>/index.html with the frames side by
 side and, per frame, the hashes, the largest channel difference, the mean difference and PSNR.
@@ -24,7 +24,8 @@ import subprocess
 import sys
 import tempfile
 import zlib
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from urllib.parse import quote
 
 SAMPLE_TRACE = "sample"
 
@@ -50,7 +51,7 @@ def device_class(renderer):
 
 
 def read_png(path):
-    """Decodes an 8-bit RGBA or RGB PNG (what eden-cli writes) to (width, height, rgba bytes)."""
+    """Decodes an 8-bit RGBA or RGB PNG (what hoochii-cli writes) to (width, height, rgba bytes)."""
     data = Path(path).read_bytes()
     if data[:8] != b"\x89PNG\r\n\x1a\n":
         raise ValueError(f"{path} is not a PNG")
@@ -137,6 +138,14 @@ def compare_runs(base_dir, base, head_dir, head):
     return rows
 
 
+def safe_frame_src(side, file_name):
+    raw = str(file_name).replace("\\", "/")
+    path = PurePosixPath(raw)
+    if not raw or raw.startswith("/") or (len(raw) > 1 and raw[1] == ":") or ".." in path.parts:
+        raise ValueError(f"unsafe frame path: {file_name!r}")
+    return html.escape(quote(f"{side}/{path.as_posix()}"), quote=True)
+
+
 def write_html(out, rows, base_label, head_label):
     lines = ["<!doctype html><meta charset=utf-8><title>GPU trace comparison</title>",
              "<style>body{font:14px sans-serif}td{padding:4px;vertical-align:top}"
@@ -147,10 +156,14 @@ def write_html(out, rows, base_label, head_label):
         cells = []
         for side in ("base", "head"):
             frame = row[side]
-            cells.append(f"<td><img src='{side}/{frame['file']}'><br>{frame['hash']}</td>"
-                         if frame else "<td>missing</td>")
+            if frame:
+                src = safe_frame_src(side, frame["file"])
+                frame_hash = html.escape(str(frame["hash"]))
+                cells.append(f"<td><img src='{src}'><br>{frame_hash}</td>")
+            else:
+                cells.append("<td>missing</td>")
         note = "identical" if row["equal"] else html.escape(json.dumps(row.get("difference", {})))
-        lines.append(f"<tr{cls}><td>{row['index']}</td>{''.join(cells)}<td>{note}</td></tr>")
+        lines.append(f"<tr{cls}><td>{html.escape(str(row['index']))}</td>{''.join(cells)}<td>{note}</td></tr>")
     lines.append("</table>")
     (Path(out) / "index.html").write_text("\n".join(lines))
 
@@ -218,7 +231,27 @@ def check(cli, corpus_path, traces_dir, out, require):
     return failures
 
 
-def main():
+def add_replay_flags(subparser):
+    subparser.add_argument("--frames", type=int, help="maximum frames to replay")
+    subparser.add_argument("--device", type=int, help="Vulkan device index")
+    subparser.add_argument("--gpu-accuracy", choices=("low", "high"), help="GPU accuracy level")
+    subparser.add_argument("--render-thread", choices=("on", "off"), help="GPU render thread mode")
+
+
+def replay_extra_args(args):
+    extra = []
+    if args.frames is not None:
+        extra += ["--frames", str(args.frames)]
+    if args.device is not None:
+        extra += ["--device", str(args.device)]
+    if args.gpu_accuracy is not None:
+        extra += ["--gpu-accuracy", args.gpu_accuracy]
+    if args.render_thread is not None:
+        extra += ["--render-thread", args.render_thread]
+    return extra
+
+
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -226,11 +259,13 @@ def main():
     one.add_argument("--cli", required=True)
     one.add_argument("trace")
     one.add_argument("--out", required=True)
+    add_replay_flags(one)
     two = commands.add_parser("compare")
     two.add_argument("--base", required=True)
     two.add_argument("--head", required=True)
     two.add_argument("trace")
     two.add_argument("--out", required=True)
+    add_replay_flags(two)
     corpus = commands.add_parser("check")
     corpus.add_argument("--cli", required=True)
     corpus.add_argument("--corpus", required=True)
@@ -238,17 +273,18 @@ def main():
     corpus.add_argument("--out", help="work directory (default: a temporary one)")
     corpus.add_argument("--require", action="store_true",
                         help="fail when a corpus trace is missing instead of skipping it")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.command == "replay":
-        result = replay(args.cli, args.trace, args.out)
+        result = replay(args.cli, args.trace, args.out, extra=replay_extra_args(args))
         for frame in result["frames"]:
             print(f"{frame['index']:4} {frame['hash']} {frame['ms']:8.1f} ms")
         return 0
     if args.command == "compare":
         out = Path(args.out)
-        base = replay(args.base, args.trace, out / "base")
-        head = replay(args.head, args.trace, out / "head")
+        extra = replay_extra_args(args)
+        base = replay(args.base, args.trace, out / "base", extra=extra)
+        head = replay(args.head, args.trace, out / "head", extra=extra)
         rows = compare_runs(out / "base", base, out / "head", head)
         write_html(out, rows, args.base, args.head)
         differing = [row["index"] for row in rows if not row["equal"]]

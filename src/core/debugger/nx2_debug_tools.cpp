@@ -1027,8 +1027,17 @@ Service::~Service() {
 }
 
 std::unique_ptr<Service> MaybeStartService(System& system, std::string title, u64 program_id) {
-    const char* const text = std::getenv("EDEN_NX2_DEBUG_SERVER");
-    if (text == nullptr || *text == '\0') {
+    const auto first_env = [](std::initializer_list<const char*> names) -> const char* {
+        for (const char* name : names) {
+            if (const char* const value = std::getenv(name); value != nullptr && *value != '\0') {
+                return value;
+            }
+        }
+        return nullptr;
+    };
+    const char* const text =
+        first_env({"HOOCHII_DEBUG_SERVER", "LICHII_DEBUG_SERVER", "EDEN_NX2_DEBUG_SERVER"});
+    if (text == nullptr) {
         return nullptr;
     }
     std::string error;
@@ -1037,8 +1046,9 @@ std::unique_ptr<Service> MaybeStartService(System& system, std::string title, u6
         LOG_ERROR(Debug, "EDEN_NX2_DEBUG_SERVER={}: {}; the debug server is off", text, error);
         return nullptr;
     }
-    const char* const directory = std::getenv("EDEN_NX2_DEBUG_DIR");
-    std::string dump_directory = directory != nullptr && *directory != '\0'
+    const char* const directory =
+        first_env({"HOOCHII_DEBUG_DIR", "LICHII_DEBUG_DIR", "EDEN_NX2_DEBUG_DIR"});
+    std::string dump_directory = directory != nullptr
         ? std::string{directory}
         : (Common::FS::GetEdenPath(Common::FS::EdenPath::LogDir) / "debug-server").generic_string();
     try {

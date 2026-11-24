@@ -50,6 +50,11 @@ if (LICHII_TESTS)
     target_include_directories(game_list_patch_cache_tests PRIVATE ..)
     target_link_libraries(game_list_patch_cache_tests PRIVATE Qt6::Core)
     add_test(NAME game_list_patch_cache_tests COMMAND game_list_patch_cache_tests)
+
+    add_executable(game_discovery_tests
+        ../../tools/integration/game_discovery_test.cpp)
+    target_include_directories(game_discovery_tests PRIVATE ..)
+    add_test(NAME game_discovery_tests COMMAND game_discovery_tests)
 endif()
 
 if (UNIX)
