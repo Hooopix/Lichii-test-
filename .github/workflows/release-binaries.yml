@@ -646,6 +646,13 @@ jobs:
           if ($unshippable) {
             throw "build/release/bin holds FlyHigh model files, which must not ship: $($unshippable.FullName -join ', ')"
           }
+          $variant = if ('${{ matrix.platform }}' -like '*-pgo') { 'pgo' } else { 'standard' }
+          $outExe = Join-Path (Get-Location) "hoochii-${env:GITHUB_SHA}-${{ matrix.platform }}-installer.exe"
+          $binDir = (Resolve-Path 'build/release/bin').Path
+          makensis "/DPRODUCT_VERSION=build-${env:GITHUB_RUN_NUMBER}" "/DARCH=x86_64" "/DVARIANT=$variant" "/DBINARY_SOURCE_DIR=$binDir" "/DOUT_FILE=$outExe" dist/installer.nsi
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $outExe -PathType Leaf)) {
+            throw "$outExe was not produced (makensis exit $LASTEXITCODE)"
+          }
 
       # A self-contained app bundle: macdeployqt copies Qt and every other Homebrew library both
       # programs load into the bundle, then the leftover Homebrew and build-tree search paths are
@@ -731,6 +738,16 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      - name: Upload Windows installer
+        if: startsWith(matrix.platform, 'windows')
+        uses: actions/upload-artifact@v7
+        with:
+          name: hoochii-installer-${{ matrix.platform }}${{ inputs.nsight_aftermath && '-aftermath' || '' }}-${{ github.sha }}
+          path: hoochii-${{ github.sha }}-${{ matrix.platform }}-installer.exe
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
       - name: Upload Windows symbols
         if: startsWith(matrix.platform, 'windows')
         uses: actions/upload-artifact@v7
@@ -793,7 +810,12 @@ jobs:
           strip_sha() { sed "s/-${GITHUB_SHA}//" <<< "$1"; }
           for artifact in artifacts/*/; do
             name=$(basename "$artifact")
-            if compgen -G "$artifact*.AppImage" > /dev/null; then
+            if compgen -G "$artifact*-installer.exe" > /dev/null; then
+              # Windows NSIS installer: ship the .exe as is.
+              for file in "$artifact"*-installer.exe; do
+                cp "$file" "dist/$(strip_sha "$(basename "$file")")"
+              done
+            elif compgen -G "$artifact*.AppImage" > /dev/null; then
               # Linux: ship the AppImage and the tar.gz as they are.
               for file in "$artifact"*.AppImage "$artifact"*.tar.gz; do
                 cp "$file" "dist/$(strip_sha "$(basename "$file")")"
@@ -828,6 +850,12 @@ jobs:
             appimage=$(link AppImage "$1.AppImage")
             tar=$(link tar.gz "$1.tar.gz")
             echo "${appimage}${appimage:+${tar:+ · }}${tar}"
+          }
+          win_installer_zip() {
+            local exe zip
+            exe=$(link "installer.exe" "$1-installer.exe")
+            zip=$(link "zip" "$1.zip")
+            echo "${exe}${exe:+${zip:+ · }}${zip}"
           }
           has_pgo=$(compgen -G 'dist/*-pgo.*' || true)
           row() {
@@ -864,10 +892,10 @@ jobs:
 
           ## Windows
 
-          Windows packages are in-place zip files: extract and run \`hoochii.exe\`, or \`hoochii-cli.exe\` from a terminal.
+          Run the **installer (\`.exe\`)** directly, or extract the portable **\`.zip\`** and run \`hoochii.exe\` (or \`hoochii-cli.exe\` from a terminal).
 
           $({
-            row "amd64 / x86_64" "$(link zip hoochii-windows-x86_64.zip)" "$(link "PGO zip" hoochii-windows-x86_64-pgo.zip)" "Both built with clang-cl and ThinLTO; the PGO zip adds a profile trained on Ocarina of Time"
+            row "amd64 / x86_64" "$(win_installer_zip hoochii-windows-x86_64)" "$(win_installer_zip hoochii-windows-x86_64-pgo)" "Both built with clang-cl and ThinLTO; PGO adds a profile trained on Ocarina of Time"
           } | table)
 
           ## macOS

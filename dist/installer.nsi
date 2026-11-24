@@ -26,10 +26,16 @@ ManifestDPIAware true
 !define PRODUCT_DIR_REGKEY "Software\Microsoft\Windows\CurrentVersion\App Paths\${PRODUCT_NAME}.exe"
 !define PRODUCT_UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}"
 
-!define BINARY_SOURCE_DIR "..\bin"
+!ifndef BINARY_SOURCE_DIR
+  !define BINARY_SOURCE_DIR "..\bin"
+!endif
+
+!ifndef OUT_FILE
+  !define OUT_FILE "${PRODUCT_NAME}-Windows-${PRODUCT_VERSION}-${ARCH}-${VARIANT}-installer.exe"
+!endif
 
 Name "${PRODUCT_NAME}"
-OutFile "${PRODUCT_NAME}-Windows-${PRODUCT_VERSION}-${ARCH}-${VARIANT}-installer.exe"
+OutFile "${OUT_FILE}"
 SetCompressor /SOLID lzma
 InstallDir "$LOCALAPPDATA\$(^Name)" 
 ShowInstDetails show
