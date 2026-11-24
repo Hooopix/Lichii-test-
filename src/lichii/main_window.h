@@ -202,6 +202,11 @@ public:
         return dlss_status_text;
     }
 
+    /// What AMD FSR 4 ran as since the last status bar update, empty when it didn't run
+    [[nodiscard]] const QString& Fsr4StatusText() const {
+        return fsr4_status_text;
+    }
+
 signals:
 
     /**
@@ -630,6 +635,8 @@ private:
     u64 frame_gen_frames = 0;
     u64 dlss_evaluations = 0;
     QString dlss_status_text;
+    u64 fsr4_evaluations = 0;
+    QString fsr4_status_text;
     bool frame_gen_generating = false;
     double frame_gen_fps = 0.0;
     QElapsedTimer frame_gen_fps_timer;

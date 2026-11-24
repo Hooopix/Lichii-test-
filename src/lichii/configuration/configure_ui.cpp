@@ -148,19 +148,6 @@ ConfigureUi::ConfigureUi(Core::System& system_, QWidget* parent)
 
     SetConfiguration();
 
-    // Force game list reload if any of the relevant settings are changed.
-    connect(ui->show_add_ons, &QCheckBox::STATE_CHANGED, this, &ConfigureUi::RequestGameListUpdate);
-    connect(ui->show_size, &QCheckBox::STATE_CHANGED, this, &ConfigureUi::RequestGameListUpdate);
-    connect(ui->show_types, &QCheckBox::STATE_CHANGED, this, &ConfigureUi::RequestGameListUpdate);
-    connect(ui->show_play_time, &QCheckBox::STATE_CHANGED, this,
-            &ConfigureUi::RequestGameListUpdate);
-    connect(ui->folder_icon_size_combobox, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &ConfigureUi::RequestGameListUpdate);
-    connect(ui->row_1_text_combobox, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-            &ConfigureUi::RequestGameListUpdate);
-    connect(ui->row_2_text_combobox, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-            &ConfigureUi::RequestGameListUpdate);
-
     // Update text ComboBoxes after user interaction.
     connect(ui->row_1_text_combobox, QOverload<int>::of(&QComboBox::activated),
             [this] { ConfigureUi::UpdateSecondRowComboBox(); });
@@ -168,7 +155,7 @@ ConfigureUi::ConfigureUi(Core::System& system_, QWidget* parent)
             [this] { ConfigureUi::UpdateFirstRowComboBox(); });
 
     // Set screenshot path to user specification.
-    connect(ui->screenshot_path_button, &QToolButton::pressed, this, [this] {
+    connect(ui->screenshot_path_button, &QToolButton::clicked, this, [this] {
         auto dir =
             QFileDialog::getExistingDirectory(this, tr("Select Screenshots Path..."),
                                               QString::fromStdString(Common::FS::GetEdenPathString(
@@ -190,6 +177,20 @@ ConfigureUi::ConfigureUi(Core::System& system_, QWidget* parent)
 ConfigureUi::~ConfigureUi() = default;
 
 void ConfigureUi::ApplyConfiguration() {
+    auto uses_hoochii_icons = [] {
+        const auto theme = UISettings::EffectiveTheme();
+        return theme == "lichii" || theme == "hoochii";
+    };
+    const bool old_show_add_ons = UISettings::values.show_add_ons.GetValue();
+    const bool old_show_size = UISettings::values.show_size.GetValue();
+    const bool old_show_types = UISettings::values.show_types.GetValue();
+    const bool old_show_play_time = UISettings::values.show_play_time.GetValue();
+    const u32 old_folder_icon_size = UISettings::values.folder_icon_size.GetValue();
+    const u32 old_row_1 = UISettings::values.row_1_text_id.GetValue();
+    const u32 old_row_2 = UISettings::values.row_2_text_id.GetValue();
+    const std::string old_sgdb = UISettings::values.steamgriddb_api_key.GetValue();
+    const bool old_hoochii_icons = uses_hoochii_icons();
+
     UISettings::values.theme =
         ui->theme_combobox->itemData(ui->theme_combobox->currentIndex()).toString().toStdString();
     UISettings::values.show_add_ons = ui->show_add_ons->isChecked();
@@ -209,7 +210,20 @@ void ConfigureUi::ApplyConfiguration() {
     const u32 height = ScreenshotDimensionToInt(ui->screenshot_height->currentText());
     UISettings::values.screenshot_height.SetValue(height);
 
-    RequestGameListUpdate();
+    const bool game_list_changed =
+        old_show_add_ons != UISettings::values.show_add_ons.GetValue() ||
+        old_show_size != UISettings::values.show_size.GetValue() ||
+        old_show_types != UISettings::values.show_types.GetValue() ||
+        old_show_play_time != UISettings::values.show_play_time.GetValue() ||
+        old_folder_icon_size != UISettings::values.folder_icon_size.GetValue() ||
+        old_row_1 != UISettings::values.row_1_text_id.GetValue() ||
+        old_row_2 != UISettings::values.row_2_text_id.GetValue() ||
+        old_sgdb != UISettings::values.steamgriddb_api_key.GetValue() ||
+        old_hoochii_icons != uses_hoochii_icons();
+
+    if (game_list_changed) {
+        RequestGameListUpdate();
+    }
     system.ApplySettings();
 }
 

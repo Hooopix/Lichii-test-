@@ -7,6 +7,7 @@
 #include <QString>
 
 class GameCard;
+class GameFilterProxyModel;
 class GameListModel;
 class QResizeEvent;
 
@@ -18,10 +19,15 @@ public:
 
     void SetModel(GameListModel* model);
     void ApplyFilter(const QString& edit_filter_text, GameListModel* model);
+    [[nodiscard]] QString GetLastFilterResultItem() const;
     void UpdateIconSize();
 
     QModelIndex indexAt(const QPoint& point) const override;
 
+signals:
+    void FilterResultReady(int visible, int total);
+
 private:
     GameCard* m_gameCard = nullptr;
+    GameFilterProxyModel* m_filterProxy = nullptr;
 };

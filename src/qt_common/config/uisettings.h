@@ -11,6 +11,7 @@
 #include <vector>
 #include <QByteArray>
 #include <QMetaType>
+#include <QPoint>
 #include <QString>
 #include <QStringList>
 #include <QVector>
@@ -39,6 +40,8 @@ extern template class Setting<unsigned long long>;
 
 namespace UISettings {
 
+bool IsSystemDarkMode();
+std::string EffectiveTheme();
 bool IsDarkTheme();
 
 struct ContextualShortcut {
@@ -55,6 +58,7 @@ struct Shortcut {
 };
 
 enum class Theme {
+    Auto,
     Default,
     DefaultColorful,
     Dark,
@@ -67,7 +71,7 @@ enum class Theme {
 
 static constexpr Theme default_theme{Theme::HoochiiObsidian};
 
-using Themes = std::array<std::pair<const char*, const char*>, 8>;
+using Themes = std::array<std::pair<const char*, const char*>, 9>;
 extern const Themes themes;
 
 struct GameDir {
@@ -91,6 +95,7 @@ struct Values {
     QByteArray renderwindow_geometry;
 
     QByteArray gamelist_header_state;
+    QPoint perf_overlay_offset{25, 75};
 
     Setting<bool> single_window_mode{linkage, true, "singleWindowMode", Category::Ui};
     Setting<bool> fullscreen{linkage, false, "fullscreen", Category::Ui};

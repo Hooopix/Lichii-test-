@@ -2,11 +2,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <algorithm>
+#include <array>
 #include <filesystem>
 #include <fmt/format.h>
 #include "common/fs/fs.h"
 #include "common/fs/fs_types.h"
 #include "common/logging.h"
+#include "common/string_util.h"
 #include "frontend_common/data_manager.h"
 #include "mod_manager.h"
 
@@ -17,7 +19,7 @@ std::vector<std::filesystem::path> GetModFolder(const std::string& root) {
     std::vector<std::filesystem::path> paths;
 
     auto callback = [&paths](const std::filesystem::directory_entry& entry) -> bool {
-        const auto name = entry.path().filename().string();
+        const auto name = Common::ToLower(entry.path().filename().string());
         static const std::array<std::string, 5> valid_names = {"exefs",
                                                                "romfs",
                                                                "romfs_ext",

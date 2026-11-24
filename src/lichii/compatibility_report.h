@@ -19,6 +19,7 @@ class QNetworkReply;
 class QPlainTextEdit;
 class QPushButton;
 class QTabWidget;
+class QTimer;
 
 namespace CompatibilityReporting {
 
@@ -73,6 +74,7 @@ private:
 
     QNetworkAccessManager* network;
     QPointer<QNetworkReply> reply;
+    QTimer* cooldown{};
     State state{State::Editing};
     qint64 confirmed_game{};
     QString confirmed_title;

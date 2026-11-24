@@ -112,8 +112,11 @@ GameList::GameList(FileSys::VirtualFilesystem vfs_, FileSys::ManualContentProvid
     connect(item_model, &GameListModel::SaveConfig, this, &GameList::SaveConfig);
     connect(item_model, &GameListModel::PopulatingStarted, this, &GameList::OnPopulate);
 
-    // TODO: impl on grid/carousel
     connect(tree_view, &GameTree::FilterResultReady, search_field,
+            [this](int visible, int total) { search_field->setFilterResult(visible, total); });
+    connect(grid_view, &GameGrid::FilterResultReady, search_field,
+            [this](int visible, int total) { search_field->setFilterResult(visible, total); });
+    connect(carousel_view, &GameCarousel::FilterResultReady, search_field,
             [this](int visible, int total) { search_field->setFilterResult(visible, total); });
 
     qRegisterMetaType<QList<QStandardItem*>>("QList<QStandardItem*>");
@@ -148,6 +151,14 @@ void GameList::SetupViews() {
 }
 
 QString GameList::GetLastFilterResultItem() const {
+    switch (game_list_mode) {
+    case Settings::GameListMode::TreeView:
+        return tree_view->GetLastFilterResultItem();
+    case Settings::GameListMode::GridView:
+        return grid_view->GetLastFilterResultItem();
+    case Settings::GameListMode::CarouselView:
+        return carousel_view->GetLastFilterResultItem();
+    }
     return tree_view->GetLastFilterResultItem();
 }
 
@@ -279,16 +290,24 @@ void GameList::ResetViewMode() {
         if (!UISettings::values.game_dirs.empty()) {
             item_model->PopulateAsync(UISettings::values.game_dirs);
         }
+    } else if (search_field != nullptr && !m_populating) {
+        OnTextChanged(search_field->filterText());
     }
 }
 
 void GameList::OnTextChanged(const QString& new_text) {
     const QString edit_filter_text = new_text.toLower();
 
-    if (m_isTreeMode) {
+    switch (game_list_mode) {
+    case Settings::GameListMode::TreeView:
         tree_view->ApplyFilter(edit_filter_text, item_model);
-    } else {
+        break;
+    case Settings::GameListMode::GridView:
         grid_view->ApplyFilter(edit_filter_text, item_model);
+        break;
+    case Settings::GameListMode::CarouselView:
+        carousel_view->ApplyFilter(edit_filter_text, item_model);
+        break;
     }
 }
 

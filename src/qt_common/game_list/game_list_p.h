@@ -47,7 +47,8 @@ Q_DECLARE_METATYPE(GameListItemType);
  * @return QPixmap default icon
  */
 static bool IsLichiiTheme() {
-    return UISettings::values.theme == "lichii" || UISettings::values.theme == "hoochii";
+    const auto theme = UISettings::EffectiveTheme();
+    return theme == "lichii" || theme == "hoochii";
 }
 
 static QPixmap GetDefaultIcon(u32 size) {

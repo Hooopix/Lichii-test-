@@ -21,19 +21,19 @@ ConfigureFilesystem::ConfigureFilesystem(QWidget* parent)
     ui->setupUi(this);
     SetConfiguration();
 
-    connect(ui->nand_directory_button, &QToolButton::pressed, this,
+    connect(ui->nand_directory_button, &QToolButton::clicked, this,
             [this] { SetDirectory(DirectoryTarget::NAND, ui->nand_directory_edit); });
-    connect(ui->sdmc_directory_button, &QToolButton::pressed, this,
+    connect(ui->sdmc_directory_button, &QToolButton::clicked, this,
             [this] { SetDirectory(DirectoryTarget::SD, ui->sdmc_directory_edit); });
-    connect(ui->save_directory_button, &QToolButton::pressed, this, [this] { SetSaveDirectory(); });
-    connect(ui->gamecard_path_button, &QToolButton::pressed, this,
+    connect(ui->save_directory_button, &QToolButton::clicked, this, [this] { SetSaveDirectory(); });
+    connect(ui->gamecard_path_button, &QToolButton::clicked, this,
             [this] { SetDirectory(DirectoryTarget::Gamecard, ui->gamecard_path_edit); });
-    connect(ui->dump_path_button, &QToolButton::pressed, this,
+    connect(ui->dump_path_button, &QToolButton::clicked, this,
             [this] { SetDirectory(DirectoryTarget::Dump, ui->dump_path_edit); });
-    connect(ui->load_path_button, &QToolButton::pressed, this,
+    connect(ui->load_path_button, &QToolButton::clicked, this,
             [this] { SetDirectory(DirectoryTarget::Load, ui->load_path_edit); });
 
-    connect(ui->reset_game_list_cache, &QPushButton::pressed, this,
+    connect(ui->reset_game_list_cache, &QPushButton::clicked, this,
             &ConfigureFilesystem::ResetMetadata);
 
     connect(ui->gamecard_inserted, &QCheckBox::STATE_CHANGED, this,
@@ -88,6 +88,7 @@ void ConfigureFilesystem::ApplyConfiguration() {
     Common::FS::SetEdenPath(Common::FS::EdenPath::LoadDir,
                             ui->load_path_edit->text().toStdString());
 
+    Settings::values.gamecard_path = ui->gamecard_path_edit->text().toStdString();
     Settings::values.gamecard_inserted = ui->gamecard_inserted->isChecked();
     Settings::values.gamecard_current_game = ui->gamecard_current_game->isChecked();
     Settings::values.dump_exefs = ui->dump_exefs->isChecked();
@@ -123,7 +124,7 @@ void ConfigureFilesystem::SetDirectory(DirectoryTarget target, QLineEdit* edit) 
     QString str;
     if (target == DirectoryTarget::Gamecard) {
         str = QFileDialog::getOpenFileName(this, caption, QFileInfo(edit->text()).dir().path(),
-                                           QStringLiteral("NX Gamecard;*.xci"));
+                                           tr("NX Gamecard (*.xci)"));
     } else {
         str = QFileDialog::getExistingDirectory(this, caption, edit->text());
     }
@@ -132,7 +133,7 @@ void ConfigureFilesystem::SetDirectory(DirectoryTarget target, QLineEdit* edit) 
         return;
     }
 
-    if (str.back() != QChar::fromLatin1('/')) {
+    if (target != DirectoryTarget::Gamecard && str.back() != QChar::fromLatin1('/')) {
         str.append(QChar::fromLatin1('/'));
     }
 

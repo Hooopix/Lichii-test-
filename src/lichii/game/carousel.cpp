@@ -5,10 +5,12 @@
 #include "qt_common/game_list/model.h"
 #include "lichii/game/common.h"
 #include "lichii/game/game_card.h"
+#include "lichii/game/game_filter_proxy.h"
 #include "lichii/game/carousel.h"
 
 GameCarousel::GameCarousel(QWidget* parent) : QListView{parent} {
     m_gameCard = new GameCard(this);
+    m_filterProxy = new GameFilterProxyModel(this);
     setItemDelegate(m_gameCard);
 
     setViewMode(QListView::IconMode);
@@ -32,24 +34,23 @@ GameCarousel::GameCarousel(QWidget* parent) : QListView{parent} {
 }
 
 void GameCarousel::SetModel(GameListModel* model) {
-    QListView::setModel(model);
+    m_filterProxy->setSourceModel(model);
+    QListView::setModel(m_filterProxy);
     UpdateIconSize();
 }
 
 void GameCarousel::ApplyFilter(const QString& edit_filter_text, GameListModel* model) {
-    int row_count = model->rowCount();
+    m_filterProxy->SetFilterText(edit_filter_text);
+    const int total = model != nullptr ? model->rowCount() : 0;
+    emit FilterResultReady(m_filterProxy->rowCount(), total);
+}
 
-    for (int i = 0; i < row_count; ++i) {
-        QStandardItem* item = model->item(i, 0);
-        if (!item)
-            continue;
-
-        if (Lichii::FilterMatches(edit_filter_text, item)) {
-            setRowHidden(i, false);
-        } else {
-            setRowHidden(i, true);
-        }
+QString GameCarousel::GetLastFilterResultItem() const {
+    const int count = m_filterProxy->rowCount();
+    if (count <= 0) {
+        return {};
     }
+    return m_filterProxy->index(count - 1, 0).data(GameListItemPath::FullPathRole).toString();
 }
 
 void GameCarousel::UpdateIconSize() {

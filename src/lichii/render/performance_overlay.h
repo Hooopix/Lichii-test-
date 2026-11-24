@@ -6,6 +6,7 @@
 #include <deque>
 #include <optional>
 #include <vector>
+#include <QFont>
 #include <QWidget>
 
 #include "common/dkb_cpu_trace.h"
@@ -29,10 +30,13 @@ protected:
 
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
+    void contextMenuEvent(QContextMenuEvent* event) override;
     void closeEvent(QCloseEvent* event) override;
 
 private:
     void resetPosition(const QPoint& pos);
+    void applyCornerPreset(int corner);
     void updateStats(const Core::PerfStatsResults& results, const VideoCore::ShaderNotify& shaders);
     void paintGraph(QPainter& painter, const QRectF& area);
 
@@ -42,6 +46,13 @@ private:
 
     // drag
     QPoint m_drag_start_pos;
+    bool m_dragging = false;
+
+    QFont m_fpsFont;
+    QFont m_smallFont;
+    QFont m_smallBoldFont;
+    QFont m_footerFont;
+    QFont m_tickMediumFont;
 
     std::optional<double> m_fps;
     /// The last 5 s of 500 ms fps readings, for min/median/max

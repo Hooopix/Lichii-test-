@@ -329,17 +329,17 @@ bool UpdateDialog::DownloadTo(const QString& filename) {
     constexpr std::size_t timeout_seconds = 15;
 
     std::unique_ptr<httplib::Client> client = std::make_unique<httplib::Client>(m_asset.url);
+    if (!client->is_valid()) {
+        LOG_ERROR(Frontend, "Invalid URL {}{}", m_asset.url, m_asset.path);
+        return false;
+    }
+
     client->set_connection_timeout(timeout_seconds);
     client->set_read_timeout(timeout_seconds);
     client->set_write_timeout(timeout_seconds);
     client->set_follow_location(true);
 
     Common::Net::ConfigureCaStore(*client);
-
-    if (client == nullptr) {
-        LOG_ERROR(Frontend, "Invalid URL {}{}", m_asset.url, m_asset.path);
-        return false;
-    }
 
     auto progress =
         QtCommon::Frontend::newProgressDialog(tr("Downloading..."), tr("Cancel"), 0, 100);

@@ -9,6 +9,7 @@
 #ifdef _WIN32
 #include <cstring>
 #include <processthreadsapi.h>
+#include <string>
 #include <windows.h>
 #else
 #include <cstring>
@@ -151,28 +152,55 @@ bool StartupChecks(const char* arg0, bool* has_broken_vulkan, bool perform_vulka
 
 #ifdef _WIN32
 bool SpawnChild(const char* arg0, PROCESS_INFORMATION* pi, int flags) {
-    STARTUPINFOA startup_info;
-
-    std::memset(&startup_info, '\0', sizeof(startup_info));
+    STARTUPINFOW startup_info{};
     startup_info.cb = sizeof(startup_info);
 
-    char p_name[255];
-    std::strncpy(p_name, arg0, 254);
-    p_name[254] = '\0';
+    std::wstring exe_path(MAX_PATH, L'\0');
+    for (;;) {
+        const DWORD len =
+            GetModuleFileNameW(nullptr, exe_path.data(), static_cast<DWORD>(exe_path.size()));
+        if (len == 0) {
+            exe_path.clear();
+            break;
+        }
+        if (len < exe_path.size()) {
+            exe_path.resize(len);
+            break;
+        }
+        if (exe_path.size() >= 32768) {
+            exe_path.clear();
+            break;
+        }
+        exe_path.resize(exe_path.size() * 2);
+    }
 
-    const bool process_created = CreateProcessA(nullptr,       // lpApplicationName
-                                                p_name,        // lpCommandLine
-                                                nullptr,       // lpProcessAttributes
-                                                nullptr,       // lpThreadAttributes
-                                                false,         // bInheritHandles
-                                                flags,         // dwCreationFlags
-                                                nullptr,       // lpEnvironment
-                                                nullptr,       // lpCurrentDirectory
-                                                &startup_info, // lpStartupInfo
-                                                pi             // lpProcessInformation
+    if (exe_path.empty() && arg0 != nullptr) {
+        const int needed = MultiByteToWideChar(CP_ACP, 0, arg0, -1, nullptr, 0);
+        if (needed > 1) {
+            exe_path.resize(static_cast<std::size_t>(needed - 1));
+            MultiByteToWideChar(CP_ACP, 0, arg0, -1, exe_path.data(), needed);
+        }
+    }
+
+    if (exe_path.empty()) {
+        fmt::print(stderr, "SpawnChild failed to determine executable path\n");
+        return false;
+    }
+
+    std::wstring cmd_line = L"\"" + exe_path + L"\"";
+    const BOOL process_created = CreateProcessW(exe_path.c_str(), // lpApplicationName
+                                                cmd_line.data(),  // lpCommandLine
+                                                nullptr,          // lpProcessAttributes
+                                                nullptr,          // lpThreadAttributes
+                                                FALSE,            // bInheritHandles
+                                                flags,            // dwCreationFlags
+                                                nullptr,          // lpEnvironment
+                                                nullptr,          // lpCurrentDirectory
+                                                &startup_info,    // lpStartupInfo
+                                                pi                // lpProcessInformation
     );
     if (!process_created) {
-        fmt::print(stderr, "CreateProcessA failed with error {}\n", GetLastError());
+        fmt::print(stderr, "CreateProcessW failed with error {}\n", GetLastError());
         return false;
     }
 

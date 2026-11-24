@@ -27,6 +27,9 @@ public:
 
     void SetCurrentIndex(int index);
 
+    [[nodiscard]] ConfigureDebug* DebugSubTab() const;
+    [[nodiscard]] ConfigureCpuDebug* CpuDebugSubTab() const;
+
 private:
     void changeEvent(QEvent* event) override;
     void RetranslateUI();

@@ -7,6 +7,8 @@
 #include <QStandardItemModel>
 #include <QWidget>
 
+#include "common/common_types.h"
+
 namespace Common {
 class ParamPackage;
 }
@@ -39,6 +41,9 @@ public:
      * @param registry The HotkeyRegistry whose data is used to populate the list.
      */
     void Populate(const HotkeyRegistry& registry);
+
+    /// Filters visible hotkey rows against whitespace-separated tokens; returns true if any match.
+    bool SetSearchFilter(const QString& query);
 
 private:
     void changeEvent(QEvent* event) override;

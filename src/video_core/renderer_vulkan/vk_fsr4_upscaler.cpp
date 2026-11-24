@@ -6,6 +6,8 @@
 // and records into our command buffer. Picking the FSR 4 provider by version follows
 // CheezerWheezer's FSR 4 integration for CheezyEmu.
 
+#include <array>
+#include <atomic>
 #include <optional>
 #include <string>
 #include <vector>
@@ -14,6 +16,7 @@
 
 #include "common/logging.h"
 #include "common/settings.h"
+#include "video_core/renderer_base.h"
 #include "video_core/renderer_vulkan/vk_fsr4_upscaler.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/vulkan_common/ffx_runtime.h"
@@ -32,6 +35,7 @@
 
 namespace Vulkan {
 namespace {
+std::atomic<u64> evaluations{0};
 constexpr VkFormat OUTPUT_FORMAT = VK_FORMAT_R16G16B16A16_SFLOAT;
 constexpr VkImageUsageFlags OUTPUT_USAGE = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
                                            VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
@@ -437,7 +441,9 @@ bool Fsr4Upscaler::Upscale(const Inputs& in) {
         recorded.commandList = static_cast<void*>(*cmdbuf);
         ffxContext ctx = context;
         const ffxReturnCode_t result = api->dispatch(&ctx, &recorded.header);
-        if (result != FFX_API_RETURN_OK && !failed.exchange(true)) {
+        if (result == FFX_API_RETURN_OK) {
+            evaluations.fetch_add(1, std::memory_order_release);
+        } else if (!failed.exchange(true)) {
             LOG_ERROR(Render_Vulkan, "FSR 4: ffxDispatch failed ({}); using FSR 3.1", result);
         }
 
@@ -460,6 +466,10 @@ bool Fsr4Upscaler::Upscale(const Inputs& in) {
                                VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, {}, {}, back);
     });
     return true;
+}
+
+VideoCore::Fsr4Status Fsr4Upscaler::Status() {
+    return {.evaluations = evaluations.load(std::memory_order_acquire)};
 }
 
 } // namespace Vulkan

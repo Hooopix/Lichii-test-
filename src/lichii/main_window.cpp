@@ -493,6 +493,16 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     default_theme_paths = QIcon::themeSearchPaths();
 
     UpdateUITheme();
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+    if (auto* const hints = QGuiApplication::styleHints()) {
+        connect(hints, &QStyleHints::colorSchemeChanged, this, [this] {
+            if (UISettings::values.theme == "auto") {
+                UpdateUITheme();
+                emit UpdateThemedIcons();
+            }
+        });
+    }
+#endif
 
     SetDiscordEnabled(UISettings::values.enable_discord_presence.GetValue());
     discord_rpc->Update();
@@ -6211,6 +6221,10 @@ void MainWindow::UpdateStatusBar() {
     dlss_status_label->setText(dlss_status_text);
     dlss_status_label->setVisible(!dlss_status_text.isEmpty());
 
+    const auto fsr4 = QtCommon::system->GPU().Renderer().GetFsr4Status();
+    fsr4_status_text = fsr4.evaluations > fsr4_evaluations ? tr("FSR 4") : QString{};
+    fsr4_evaluations = fsr4.evaluations;
+
     emit statsUpdated(results, shader_notify);
 
     if (shaders_building > 0) {
@@ -6835,10 +6849,11 @@ void MainWindow::filterBarSetChecked(bool state) {
 
 static void AdjustLinkColor() {
     QPalette new_pal(qApp->palette());
+    const auto theme = UISettings::EffectiveTheme();
 
-    if (UISettings::values.theme == "hoochii")
+    if (theme == "hoochii")
         new_pal.setColor(QPalette::Link, QColor(0xff, 0x85, 0x66));
-    else if (UISettings::values.theme == "lichii")
+    else if (theme == "lichii")
         new_pal.setColor(QPalette::Link, QColor(0xf4, 0x5a, 0x85));
     else if (UISettings::IsDarkTheme())
         new_pal.setColor(QPalette::Link, QColor(0, 190, 255, 255));
@@ -6984,8 +6999,9 @@ void MainWindow::UpdateMenuIcons() {
 }
 
 void MainWindow::UpdateUITheme() {
-    const QString default_theme = QString::fromUtf8(UISettings::themes[size_t(UISettings::default_theme)].second);
-    QString current_theme = QString::fromStdString(UISettings::values.theme);
+    const QString default_theme =
+        QString::fromUtf8(UISettings::themes[size_t(UISettings::default_theme)].second);
+    QString current_theme = QString::fromStdString(UISettings::EffectiveTheme());
 
     if (current_theme.isEmpty())
         current_theme = default_theme;
@@ -7007,7 +7023,8 @@ void MainWindow::UpdateUITheme() {
     AdjustLinkColor();
 #else
     if (current_theme == QStringLiteral("default") || current_theme == QStringLiteral("colorful")) {
-        QIcon::setThemeName(current_theme == QStringLiteral("colorful") ? current_theme : startup_icon_theme);
+        QIcon::setThemeName(current_theme == QStringLiteral("colorful") ? current_theme
+                                                                        : startup_icon_theme);
         QIcon::setThemeSearchPaths(QStringList(default_theme_paths));
         if (isDarkMode()) {
             current_theme = QStringLiteral("default_dark");
@@ -7033,13 +7050,14 @@ void MainWindow::UpdateUITheme() {
     QFile f(theme_uri);
     if (f.open(QFile::ReadOnly | QFile::Text)) {
         QTextStream ts(&f);
-        qApp->setStyleSheet(ts.readAll());
-        setStyleSheet(ts.readAll());
+        const QString style = ts.readAll();
+        qApp->setStyleSheet(style);
+        setStyleSheet(QStringLiteral("QStatusBar::item{border: none;}"));
     } else {
         LOG_ERROR(Frontend, "Unable to set style \"{}\", stylesheet file not found",
                   UISettings::values.theme);
         qApp->setStyleSheet({});
-        setStyleSheet({});
+        setStyleSheet(QStringLiteral("QStatusBar::item{border: none;}"));
     }
 
     UpdateMenuIcons();
@@ -7129,8 +7147,10 @@ void MainWindow::changeEvent(QEvent* event) {
         // Keeping eye on QPalette::Window to avoid looping. QPalette::Text might be useful too
         static QColor last_window_color;
         const QColor window_color = test_palette.color(QPalette::Active, QPalette::Window);
-        if (last_window_color != window_color && (current_theme == QStringLiteral("default") ||
-                                                  current_theme == QStringLiteral("colorful"))) {
+        if (last_window_color != window_color &&
+            (current_theme == QStringLiteral("auto") ||
+             current_theme == QStringLiteral("default") ||
+             current_theme == QStringLiteral("colorful"))) {
             UpdateUITheme();
         }
         last_window_color = window_color;

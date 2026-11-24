@@ -170,6 +170,8 @@ add_executable(lichii
     configuration/configure_web.ui
     configuration/input_profiles.cpp
     configuration/input_profiles.h
+    configuration/settings_search.cpp
+    configuration/settings_search.h
     configuration/shared_widget.cpp
     configuration/shared_widget.h
     debugger/console.cpp
@@ -178,6 +180,7 @@ add_executable(lichii
     debugger/controller.h
 
     game/artwork_image.cpp game/artwork_image.h
+    game/game_filter_proxy.h
     game/iidb_client.cpp game/iidb_client.h
     game/game_list.cpp game/game_list.h
     game/game_grid.cpp game/game_grid.h
@@ -222,6 +225,7 @@ add_executable(lichii
     multiplayer/state.h
     multiplayer/validation.h
     startup_checks.cpp
+    startup_checks_config.cpp
     startup_checks.h
     set_play_time_dialog.cpp
     set_play_time_dialog.h
@@ -311,8 +315,8 @@ if (CXX_CLANG)
         $<$<VERSION_LESS:$<CXX_COMPILER_VERSION>,15>:CANNOT_EXPLICITLY_INSTANTIATE>)
 endif()
 
-file(GLOB_RECURSE ICONS ${PROJECT_SOURCE_DIR}/dist/icons/*)
-file(GLOB_RECURSE THEMES ${PROJECT_SOURCE_DIR}/dist/qt_themes/*)
+file(GLOB_RECURSE ICONS CONFIGURE_DEPENDS ${PROJECT_SOURCE_DIR}/dist/icons/*)
+file(GLOB_RECURSE THEMES CONFIGURE_DEPENDS ${PROJECT_SOURCE_DIR}/dist/qt_themes/*)
 
 if (ENABLE_UPDATE_CHECKER)
     target_compile_definitions(lichii PUBLIC ENABLE_UPDATE_CHECKER)
@@ -335,17 +339,14 @@ if (ENABLE_QT_TRANSLATION)
                     -source-language en_US
                     -target-language en_US
                     ${SRCS}
-                    ${UIS}
                     -ts ${LICHII_QT_LANGUAGES}/en.ts
                 DEPENDS
                     ${SRCS}
-                    ${UIS}
                 WORKING_DIRECTORY
                     ${CMAKE_CURRENT_SOURCE_DIR})
         else()
             qt_create_translation(QM_FILES
                 ${SRCS}
-                ${UIS}
                 ${LICHII_QT_LANGUAGES}/en.ts
             OPTIONS
                 -source-language en_US
@@ -358,25 +359,24 @@ if (ENABLE_QT_TRANSLATION)
         if (WORKAROUND_BROKEN_LUPDATE)
             add_custom_command(OUTPUT ${GENERATED_PLURALS_FILE}
                 COMMAND lupdate
+                    -pluralonly
                     -source-language en_US
                     -target-language en_US
                     ${SRCS}
-                    ${UIS}
                     -ts ${GENERATED_PLURALS_FILE}
                 DEPENDS
                     ${SRCS}
-                    ${UIS}
                 WORKING_DIRECTORY
                     ${CMAKE_CURRENT_SOURCE_DIR})
         else()
-            qt_create_translation(QM_FILES ${SRCS} ${UIS} ${GENERATED_PLURALS_FILE} OPTIONS -pluralonly -source-language en_US -target-language en_US)
+            qt_create_translation(QM_FILES ${SRCS} ${GENERATED_PLURALS_FILE} OPTIONS -pluralonly -source-language en_US -target-language en_US)
         endif()
 
         add_custom_target(translation ALL DEPENDS ${LICHII_QT_LANGUAGES}/en.ts ${GENERATED_PLURALS_FILE})
     endif()
 
     # Find all TS files except en.ts
-    file(GLOB_RECURSE LANGUAGES_TS ${LICHII_QT_LANGUAGES}/*.ts)
+    file(GLOB_RECURSE LANGUAGES_TS CONFIGURE_DEPENDS ${LICHII_QT_LANGUAGES}/*.ts)
     list(REMOVE_ITEM LANGUAGES_TS ${LICHII_QT_LANGUAGES}/en.ts)
 
     # Compile TS files to QM files
