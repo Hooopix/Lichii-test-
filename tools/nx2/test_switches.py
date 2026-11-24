@@ -20,7 +20,7 @@ class SwitchDiscovery(unittest.TestCase):
         self.root = pathlib.Path(self.tmp.name)
         self.bin = self.root / "mount/usr/bin"
         self.bin.mkdir(parents=True)
-        self.config = self.root / "config/lichii"
+        self.config = self.root / "config/hoochii"
         self.config.mkdir(parents=True)
         source = self.root / "probe.cpp"
         source.write_text('''#include "lichii/nx2_switches.h"
@@ -36,7 +36,7 @@ int main(int argc, char** argv) {
     std::cout << (value ? value : "unset");
 }
 ''')
-        subprocess.run([os.environ.get("CXX", "c++"), "-std=c++20", "-Wall", "-Wextra", "-Werror", "-I", str(ROOT / "src"), str(source), "-o", str(self.bin / "lichii")], check=True)
+        subprocess.run([os.environ.get("CXX", "c++"), "-std=c++20", "-Wall", "-Wextra", "-Werror", "-I", str(ROOT / "src"), str(source), "-o", str(self.bin / "hoochii")], check=True)
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -53,7 +53,7 @@ int main(int argc, char** argv) {
     def test_untrusted_sidecars_cannot_set_host_environment(self):
         outer = self.root / "app"
         outer.mkdir()
-        image = outer / "Lichii.AppImage"
+        image = outer / "Hoochii.AppImage"
         image.touch()
         forbidden = ("LD_PRELOAD", "LD_LIBRARY_PATH", "LIBVULKAN_PATH", "QT_PLUGIN_PATH",
                      "PATH", "HOME", "XDG_CONFIG_HOME", "LICHII_DO_STARTUP_CHECKS",
@@ -64,7 +64,7 @@ int main(int argc, char** argv) {
             for name in forbidden:
                 with self.subTest(folder=folder, name=name):
                     expected = str(self.config.parent) if name == "XDG_CONFIG_HOME" else "unset"
-                    self.assertEqual(self.run_probe(self.bin / "lichii", name, APPIMAGE=str(image)), expected)
+                    self.assertEqual(self.run_probe(self.bin / "hoochii", name, APPIMAGE=str(image)), expected)
             sidecar.unlink()
 
     def test_diagnostics_and_explicit_user_environment(self):
@@ -77,49 +77,49 @@ int main(int argc, char** argv) {
         (self.bin / "nx2_switches.txt").write_text("".join(f"{name}=1\n" for name in supported))
         for name in supported:
             with self.subTest(name=name):
-                self.assertEqual(self.run_probe(self.bin / "lichii", name), "1")
-                self.assertEqual(self.run_probe(self.bin / "lichii", name, **{name: "2"}), "2")
+                self.assertEqual(self.run_probe(self.bin / "hoochii", name), "1")
+                self.assertEqual(self.run_probe(self.bin / "hoochii", name, **{name: "2"}), "2")
         (self.config / "nx2_switches.txt").write_text("EDEN_STREAMLINE_DIR=/trusted\n")
-        self.assertEqual(self.run_probe(self.bin / "lichii", "EDEN_STREAMLINE_DIR"), "/trusted")
+        self.assertEqual(self.run_probe(self.bin / "hoochii", "EDEN_STREAMLINE_DIR"), "/trusted")
 
     def test_invalid_config_base_does_not_search_cwd(self):
-        cwd_config = self.root / "lichii"
+        cwd_config = self.root / "hoochii"
         cwd_config.mkdir()
         (cwd_config / "nx2_switches.txt").write_text("EDEN_NX2_PRELOAD_ALL_PIPELINES=99\n")
         for base in ("", "."):
             with self.subTest(base=base):
-                self.assertEqual(self.run_probe(self.bin / "lichii", XDG_CONFIG_HOME=base), "unset")
+                self.assertEqual(self.run_probe(self.bin / "hoochii", XDG_CONFIG_HOME=base), "unset")
 
     def test_executable_path_symlink_and_precedence(self):
         (self.root / "nx2_switches.txt").write_text("EDEN_NX2_PRELOAD_ALL_PIPELINES=99\n")
-        self.assertEqual(self.run_probe(self.bin / "lichii"), "unset")
+        self.assertEqual(self.run_probe(self.bin / "hoochii"), "unset")
         (self.bin / "nx2_switches.txt").write_text('EDEN_NX2_PRELOAD_ALL_PIPELINES="1"\n')
         linkdir = self.root / "links"
         linkdir.mkdir()
-        (linkdir / "lichii").symlink_to(self.bin / "lichii")
-        self.assertEqual(self.run_probe("lichii", PATH=str(linkdir)), "1")
+        (linkdir / "hoochii").symlink_to(self.bin / "hoochii")
+        self.assertEqual(self.run_probe("hoochii", PATH=str(linkdir)), "1")
         (self.config / "nx2_switches.txt").write_text("EDEN_NX2_PRELOAD_ALL_PIPELINES=2\n")
-        self.assertEqual(self.run_probe(linkdir / "lichii"), "2")
-        self.assertEqual(self.run_probe(linkdir / "lichii", EDEN_NX2_PRELOAD_ALL_PIPELINES="3"), "3")
+        self.assertEqual(self.run_probe(linkdir / "hoochii"), "2")
+        self.assertEqual(self.run_probe(linkdir / "hoochii", EDEN_NX2_PRELOAD_ALL_PIPELINES="3"), "3")
 
     @unittest.skipUnless(sys.platform.startswith("linux"), "AppImage requires Linux")
     def test_appimage_external_overrides_internal(self):
         (self.bin / "nx2_switches.txt").write_text("EDEN_NX2_PRELOAD_ALL_PIPELINES=1\n")
         outer = self.root / "app"
         outer.mkdir()
-        image = outer / "Lichii.AppImage"
+        image = outer / "Hoochii.AppImage"
         image.touch()
-        self.assertEqual(self.run_probe(self.bin / "lichii", APPIMAGE=str(image)), "1")
-        self.assertEqual(self.run_probe(self.bin / "lichii", APPIMAGE=str(outer / "missing.AppImage")), "1")
+        self.assertEqual(self.run_probe(self.bin / "hoochii", APPIMAGE=str(image)), "1")
+        self.assertEqual(self.run_probe(self.bin / "hoochii", APPIMAGE=str(outer / "missing.AppImage")), "1")
         (outer / "nx2_switches.txt").write_text("EDEN_NX2_PRELOAD_ALL_PIPELINES=2\n")
-        self.assertEqual(self.run_probe(self.bin / "lichii", APPIMAGE=str(image)), "2")
+        self.assertEqual(self.run_probe(self.bin / "hoochii", APPIMAGE=str(image)), "2")
         link = self.root / "link.AppImage"
         link.symlink_to(image)
-        self.assertEqual(self.run_probe(self.bin / "lichii", APPIMAGE=str(link)), "2")
-        self.assertEqual(self.run_probe(self.bin / "lichii", APPIMAGE="app/Lichii.AppImage"), "1")
+        self.assertEqual(self.run_probe(self.bin / "hoochii", APPIMAGE=str(link)), "2")
+        self.assertEqual(self.run_probe(self.bin / "hoochii", APPIMAGE="app/Hoochii.AppImage"), "1")
         (self.config / "nx2_switches.txt").write_text("EDEN_NX2_PRELOAD_ALL_PIPELINES=3\n")
-        self.assertEqual(self.run_probe(self.bin / "lichii", APPIMAGE=str(image)), "3")
-        self.assertEqual(self.run_probe(self.bin / "lichii", APPIMAGE=str(image), EDEN_NX2_PRELOAD_ALL_PIPELINES="4"), "4")
+        self.assertEqual(self.run_probe(self.bin / "hoochii", APPIMAGE=str(image)), "3")
+        self.assertEqual(self.run_probe(self.bin / "hoochii", APPIMAGE=str(image), EDEN_NX2_PRELOAD_ALL_PIPELINES="4"), "4")
 
     @unittest.skipUnless(sys.platform == "darwin", "macOS bundle signing requires macOS")
     def test_signed_macos_resources_and_precedence(self):
@@ -129,21 +129,21 @@ int main(int argc, char** argv) {
         resources = contents / "Resources"
         macos.mkdir(parents=True)
         resources.mkdir()
-        executable = macos / "lichii"
-        shutil.copy2(self.bin / "lichii", executable)
+        executable = macos / "hoochii"
+        shutil.copy2(self.bin / "hoochii", executable)
         (contents / "Info.plist").write_bytes(plistlib.dumps({
-            "CFBundleExecutable": "lichii",
-            "CFBundleIdentifier": "io.github.zortos293.lichii.switch-probe",
+            "CFBundleExecutable": "hoochii",
+            "CFBundleIdentifier": "io.github.hooopix.hoochii.switch-probe",
             "CFBundlePackageType": "APPL",
         }))
         (resources / "nx2_switches.txt").write_text("EDEN_NX2_PRELOAD_ALL_PIPELINES=1\n")
         subprocess.run(["codesign", "--force", "--sign", "-", str(app)], check=True)
         subprocess.run(["codesign", "--verify", "--deep", "--strict", str(app)], check=True)
 
-        link = self.root / "lichii"
+        link = self.root / "hoochii"
         link.symlink_to(executable)
         self.assertEqual(self.run_probe(executable), "1")
-        self.assertEqual(self.run_probe("lichii", PATH=str(self.root)), "1")
+        self.assertEqual(self.run_probe("hoochii", PATH=str(self.root)), "1")
         (self.config / "nx2_switches.txt").write_text("EDEN_NX2_PRELOAD_ALL_PIPELINES=2\n")
         self.assertEqual(self.run_probe(link), "2")
         self.assertEqual(self.run_probe(link, EDEN_NX2_PRELOAD_ALL_PIPELINES="3"), "3")
